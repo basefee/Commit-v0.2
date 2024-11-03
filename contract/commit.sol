@@ -1,17 +1,27 @@
-// SPDX-License-Identifier: MIT 
-pragma solidity ^0.8.20;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.21;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 
-/// @title CommitProtocol - An on-chain accountability protocol
-/// @notice This contract enables users to create and participate in commitment-based challenges
+/// @title CommitProtocol — an onchain accountability protocol
+/// @notice Enables users to create and participate in commitment-based challenges
 /// @dev Implements stake management, fee distribution, and emergency controls
-
-contract CommitProtocol is ReentrancyGuard, Ownable {
+contract CommitProtocol is 
+    UUPSUpgradeable, 
+    ReentrancyGuardUpgradeable, 
+    OwnableUpgradeable, 
+    PausableUpgradeable 
+{
     using SafeERC20 for IERC20;
+
+    /*//////////////////////////////////////////////////////////////
+                                STRUCTS
+    //////////////////////////////////////////////////////////////*/
 
     struct Client {
         address feeAddress;
@@ -26,46 +36,46 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
         address tokenAddress;
         uint256 stakeAmount;
         uint256 joinFee;
-        uint256 creatorTokenFee;
         uint8 creatorShare;
         string description;
         address[] participants;
         mapping(address => bool) participantSuccess;
-        bool isResolved;
-        bool isCancelled;
+        CommitmentStatus status;
         uint256 failedCount;
         uint256 joinDeadline;
         uint256 fulfillmentDeadline;
     }
 
+    enum CommitmentStatus { Active, Resolved, Cancelled }
 
-    // Fee structure
-    /// @notice Fee structure for the protocol
-    /// @dev All fees are represented in basis points (1/100 of a percent)
-    uint256 public constant COMMIT_CREATION_FEE = 0.001 ether;  // Fixed fee in ETH
-    uint8 public constant PROTOCOL_SHARE = 1;      // 1% protocol fee from failed stakes
-    uint8 public constant MAX_CLIENT_FEE = 9;      // Maximum 9% client fee from failed stakes
-    uint8 public constant MAX_CREATOR_SHARE = 10;  // Maximum 10% creator share from failed stakes
-	
-	// Operational limits
-    /// @notice Operational constraints to ensure protocol safety
+    /*//////////////////////////////////////////////////////////////
+                                CONSTANTS
+    //////////////////////////////////////////////////////////////*/
+
+    uint256 public constant COMMIT_CREATION_FEE = 0.001 ether;  // 0.001 ETH
+    uint8 public constant PROTOCOL_SHARE = 1;      // 1% protocol fee
+    uint8 public constant MAX_CLIENT_FEE = 9;      // Max 9% client fee
+    uint8 public constant MAX_CREATOR_SHARE = 10;  // Max 10% creator share
     uint256 public constant MAX_DESCRIPTION_LENGTH = 1000;    // Characters
-    uint256 public constant MAX_PARTICIPANTS = 100;           // Per commitment
-    uint256 public constant MAX_DEADLINE_DURATION = 365 days; // Maximum time window
+    uint256 public constant MAX_DEADLINE_DURATION = 365 days; // Max time window
+		
+    /*//////////////////////////////////////////////////////////////
+                            STATE VARIABLES
+    //////////////////////////////////////////////////////////////*/
 
-    // State variables
     uint256 public nextCommitmentId;
     address public protocolFeeAddress;
-    bool public paused;
     mapping(address => bool) public allowedTokens;
     mapping(address => Client) public clients;
     mapping(uint256 => Commitment) public commitments;
     mapping(uint256 => mapping(address => bool)) public hasJoined;
     mapping(uint256 => mapping(address => uint256)) public balances;
-    mapping(address => uint256) public accumulatedFees;
     mapping(address => mapping(address => uint256)) public accumulatedTokenFees;
 
-    // Events
+    /*//////////////////////////////////////////////////////////////
+                                EVENTS
+    //////////////////////////////////////////////////////////////*/
+
     event ClientRegistered(address indexed clientAddress, address feeAddress, uint8 feeShare);
     event TokenAllowanceUpdated(address indexed token, bool allowed);
     event CommitmentCreated(
@@ -75,33 +85,54 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
         address tokenAddress,
         uint256 stakeAmount,
         uint256 joinFee,
-        uint256 creatorTokenFee,
         uint8 creatorShare
     );
     event CommitmentJoined(uint256 indexed id, address indexed participant);
     event CommitmentResolved(uint256 indexed id, address[] winners);
     event CommitmentCancelled(uint256 indexed id);
     event RewardsClaimed(
-			uint256 indexed id,
-			address indexed user,
-			address indexed token,
-			uint256 amount
-	);
-    event Paused(address account);
-    event Unpaused(address account);
+        uint256 indexed id,
+        address indexed user,
+        address indexed token,
+        uint256 amount
+    );
     event ProtocolFeeAddressUpdated(address oldAddress, address newAddress);
     event EmergencyWithdrawal(address token, uint256 amount);
     event ClientDeactivated(address indexed clientAddress);
     event CommitmentEmergencyPaused(uint256 indexed id);
+    event CommitmentEmergencyResolved(uint256 indexed id);
+    event FeesClaimed(address indexed recipient, address indexed token, uint256 amount);
 
-    // Modifiers
+    /*//////////////////////////////////////////////////////////////
+                                ERRORS
+    //////////////////////////////////////////////////////////////*/
+
+    error InvalidAddress();
+    error UnauthorizedAccess(address caller);
+    error InvalidState(CommitmentStatus status);
+    error InsufficientBalance(uint256 available, uint256 required);
+    error FulfillmentPeriodNotEnded(uint256 currentTime, uint256 deadline);
+    error AlreadyJoined();
+    error NoRewardsToClaim();
+    error CommitmentNotExists(uint256 id);
+    error InvalidCreationFee(uint256 sent, uint256 required);
+    error TokenNotAllowed(address token);
+    error ETHTransferFailed();
+    error InvalidWinner(address winner);
+    error InvalidTokenContract(address token);
+    error InvalidFeeConfiguration(uint256 total);
+
+    /*//////////////////////////////////////////////////////////////
+                                MODIFIERS
+    //////////////////////////////////////////////////////////////*/
+
     modifier whenNotPaused() {
         require(!paused, "Contract is paused");
         _;
     }
 
     modifier commitmentExists(uint256 _id) {
-        require(_id < nextCommitmentId, "Commitment does not exist");
+        if (_id >= nextCommitmentId) revert CommitmentNotExists(_id);
         _;
     }
 
@@ -110,61 +141,74 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(address _protocolFeeAddress) Ownable(msg.sender) {
-        require(_protocolFeeAddress != address(0), "Invalid protocol fee address");
+    /*//////////////////////////////////////////////////////////////
+                            INITIALIZATION
+    //////////////////////////////////////////////////////////////*/
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initializes the contract with the protocol fee address
+    /// @param _protocolFeeAddress The address where protocol fees are sent
+    function initialize(address _protocolFeeAddress) public initializer {
+        __Ownable_init();
+        __ReentrancyGuard_init();
+        __UUPSUpgradeable_init();
+        __Pausable_init();
+        if (_protocolFeeAddress == address(0)) revert InvalidAddress();
         protocolFeeAddress = _protocolFeeAddress;
     }
 
-    /// @notice Creates a new commitment challenge
-    /// @param _tokenAddress The ERC20 token used for staking
-    /// @param _stakeAmount Amount each participant must stake in token units
-    /// @param _joinFee Fee in ETH required to join the commitment
-    /// @param _creatorTokenFee Additional token fee that goes to creator (in same token as stake)
-    /// @param _creatorShare Percentage of failed stakes allocated to creator (0-10)
-    /// @param _description Human-readable description of the commitment
-    /// @param _joinDeadline Timestamp when joining period ends
-    /// @param _fulfillmentDeadline Timestamp when commitment must be completed
-    /// @param _client Address of the client platform creating this commitment
-    /// @dev Fees are distributed immediately, stakes are held until resolution
+    /*//////////////////////////////////////////////////////////////
+                        COMMITMENT CORE FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+	/// @notice Creates a commitment with specified parameters and stake requirements
+    /// @param _tokenAddress The address of the ERC20 token used for staking
+    /// @param _stakeAmount The amount each participant must stake
+    /// @param _joinFee The fee required to join the commitment
+    /// @param _creatorShare The percentage of failed stakes the creator receives
+    /// @param _description A brief description of the commitment
+    /// @param _joinDeadline The deadline for participants to join
+    /// @param _fulfillmentDeadline The deadline for fulfilling the commitment
+    /// @param _client The address of the client associated with the commitment
     function createCommitment(
         address _tokenAddress,
         uint256 _stakeAmount,
         uint256 _joinFee,
-        uint256 _creatorTokenFee,
         uint8 _creatorShare,
         string calldata _description,
         uint256 _joinDeadline,
         uint256 _fulfillmentDeadline,
         address _client
     ) external payable nonReentrant whenNotPaused {
-        require(allowedTokens[_tokenAddress], "Token not allowed");
-        require(clients[_client].isActive, "Invalid client");
-        require(msg.value == COMMIT_CREATION_FEE, "Must pay creation fee");
-        require(_creatorShare <= MAX_CREATOR_SHARE, "Creator share too high");
-        require(_joinDeadline > block.timestamp, "Join deadline must be future");
-        require(_fulfillmentDeadline > _joinDeadline, "Invalid fulfillment deadline");
-        require(_fulfillmentDeadline <= block.timestamp + MAX_DEADLINE_DURATION, "Deadline too far");
-        require(bytes(_description).length <= MAX_DESCRIPTION_LENGTH, "Description too long");
-        require(_stakeAmount > 0, "Stake amount must be positive");
-        require(_creatorTokenFee >= 0, "Invalid creator token fee");
-        if (_joinFee > 0) {
-            require(_joinFee >= PROTOCOL_SHARE + clients[_client].feeShare, "Fee too low for shares");
-        }
+        if (msg.value != COMMIT_CREATION_FEE) revert InvalidCreationFee(msg.value, COMMIT_CREATION_FEE);
+        if (!allowedTokens[_tokenAddress]) revert TokenNotAllowed(_tokenAddress);
+        if (!clients[_client].isActive) revert InvalidState(CommitmentStatus.Cancelled);
+        if (_creatorShare > MAX_CREATOR_SHARE) revert InvalidState(CommitmentStatus.Cancelled);
+        if (_joinDeadline <= block.timestamp) revert InvalidState(CommitmentStatus.Cancelled);
+        if (_fulfillmentDeadline <= _joinDeadline) revert InvalidState(CommitmentStatus.Cancelled);
+        if (_fulfillmentDeadline > block.timestamp + MAX_DEADLINE_DURATION) revert InvalidState(CommitmentStatus.Cancelled);
+        if (bytes(_description).length > MAX_DESCRIPTION_LENGTH) revert InvalidState(CommitmentStatus.Cancelled);
+        if (_stakeAmount == 0) revert InvalidState(CommitmentStatus.Cancelled);
+        if (_joinFee < PROTOCOL_SHARE + clients[_client].feeShare) revert InvalidState(CommitmentStatus.Cancelled);
 
-        // Transfer creation fee
-        (bool sent, ) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
-        require(sent, "Failed to send creation fee");
+		// Transfer creation fee in ETH
+        (bool sent,) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
+        if (!sent) revert ETHTransferFailed();
 
         uint256 commitmentId = nextCommitmentId++;
         Commitment storage commitment = commitments[commitmentId];
-
+        
+        // Initialize commitment details
         commitment.id = commitmentId;
         commitment.creator = msg.sender;
         commitment.client = _client;
         commitment.tokenAddress = _tokenAddress;
         commitment.stakeAmount = _stakeAmount;
         commitment.joinFee = _joinFee;
-        commitment.creatorTokenFee = _creatorTokenFee;
         commitment.creatorShare = _creatorShare;
         commitment.description = _description;
         commitment.joinDeadline = _joinDeadline;
@@ -177,58 +221,42 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
             _tokenAddress,
             _stakeAmount,
             _joinFee,
-            _creatorTokenFee,
             _creatorShare
         );
     }
 
-    function joinCommitment(uint256 _id) external payable nonReentrant whenNotPaused commitmentExists(_id) withinJoinPeriod(_id) {
+  	/// @notice Allows joining an active commitment
+    /// @param _id The ID of the commitment to join
+    function joinCommitment(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) withinJoinPeriod(_id) {
         Commitment storage commitment = commitments[_id];
-        require(!hasJoined[_id][msg.sender], "Already joined");
-        require(!commitment.isResolved && !commitment.isCancelled, "Commitment not active");
-        require(commitment.participants.length < MAX_PARTICIPANTS, "Maximum participants reached");
+        if (hasJoined[_id][msg.sender]) revert AlreadyJoined();
+        if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
 
+        // Calculate total amount needed (stake + join fee)
+        uint256 totalAmount = commitment.stakeAmount;
+        
         // Handle join fee if set
         if (commitment.joinFee > 0) {
-            require(msg.value == commitment.joinFee, "Incorrect join fee");
-
             uint256 protocolShare = (commitment.joinFee * PROTOCOL_SHARE) / 100;
             uint256 clientShare = (commitment.joinFee * clients[commitment.client].feeShare) / 100;
             uint256 creatorShare = commitment.joinFee - protocolShare - clientShare;
 
-            (bool sentProtocol, ) = protocolFeeAddress.call{value: protocolShare}("");
-            (bool sentClient, ) = clients[commitment.client].feeAddress.call{value: clientShare}("");
-            (bool sentCreator, ) = commitment.creator.call{value: creatorShare}("");
+            totalAmount += commitment.joinFee;
             
-            require(sentProtocol && sentClient && sentCreator, "Fee transfer failed");
-        }
-
-        // Handle creator token fee if set
-        if (commitment.creatorTokenFee > 0) {
-            uint256 protocolTokenFee = (commitment.creatorTokenFee * PROTOCOL_SHARE) / 100;
-            uint256 clientTokenFee = (commitment.creatorTokenFee * clients[commitment.client].feeShare) / 100;
-            uint256 creatorTokenShare = commitment.creatorTokenFee - protocolTokenFee - clientTokenFee;
-
-            // Transfer total token fee amount from participant
-            IERC20(commitment.tokenAddress).safeTransferFrom(
-                msg.sender,
-                address(this),
-                commitment.creatorTokenFee
-            );
-
             // Update accumulated token fees
-            accumulatedTokenFees[commitment.tokenAddress][protocolFeeAddress] += protocolTokenFee;
-            accumulatedTokenFees[commitment.tokenAddress][clients[commitment.client].feeAddress] += clientTokenFee;
-            balances[_id][commitment.creator] += creatorTokenShare;
+            accumulatedTokenFees[commitment.tokenAddress][protocolFeeAddress] += protocolShare;
+            accumulatedTokenFees[commitment.tokenAddress][clients[commitment.client].feeAddress] += clientShare;
+            balances[_id][commitment.creator] += creatorShare;
         }
 
-        // Transfer stake amount
+        // Transfer total amount in one transaction
         IERC20(commitment.tokenAddress).safeTransferFrom(
             msg.sender,
             address(this),
-            commitment.stakeAmount
+            totalAmount
         );
 
+        // Record participant's join status and balance
         commitment.participants.push(msg.sender);
         hasJoined[_id][msg.sender] = true;
         balances[_id][msg.sender] = commitment.stakeAmount;
@@ -236,108 +264,102 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
         emit CommitmentJoined(_id, msg.sender);
     }
 
+    /// @notice Resolves commitment and distributes rewards to winners
+    /// @param _id The ID of the commitment to resolve
+    /// @param _winners The addresses of the participants who succeeded
     function resolveCommitment(uint256 _id, address[] calldata _winners) external nonReentrant whenNotPaused commitmentExists(_id) {
         Commitment storage commitment = commitments[_id];
-        require(msg.sender == commitment.creator, "Only creator can resolve");
-        require(!commitment.isResolved && !commitment.isCancelled, "Commitment not active");
-        require(block.timestamp >= commitment.fulfillmentDeadline, "Fulfillment period not ended");
-        require(_winners.length > 0, "Must have at least one winner");
-        require(_winners.length <= commitment.participants.length, "Too many winners");
+        if (msg.sender != commitment.creator && msg.sender != owner()) revert UnauthorizedAccess(msg.sender);
+        if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
+        if (block.timestamp < commitment.fulfillmentDeadline) revert FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline);
+        if (_winners.length == 0) revert InvalidState(CommitmentStatus.Resolved);
+        if (_winners.length > commitment.participants.length) revert InvalidState(CommitmentStatus.Resolved);
 
-        // Validate winners and count failures
-        commitment.failedCount = 0;
-        mapping(address => bool) memory seenWinners;
-        for (uint256 j = 0; j < _winners.length; j++) {
-            require(!seenWinners[_winners[j]], "Duplicate winner");
-            seenWinners[_winners[j]] = true;
-            address participant = _winners[j];
+        for (uint256 i = 0; i < commitment.participants.length; i++) {
+            address participant = commitment.participants[i];
             bool isWinner = false;
-
-            for (uint256 i = 0; i < commitment.participants.length; i++) {
-                if (participant == commitment.participants[i]) {
+            for (uint256 j = 0; j < _winners.length; j++) {
+                if (participant == _winners[j]) {
                     isWinner = true;
                     break;
                 }
             }
 
+            // Mark participant success and count failures
             commitment.participantSuccess[participant] = isWinner;
             if (!isWinner) {
                 commitment.failedCount++;
             }
         }
 
-        distributeRewards(_id, _winners);
-        commitment.isResolved = true;
-        emit CommitmentResolved(_id, _winners);
-    }
-
-    /// @notice Distributes rewards after commitment resolution
-    /// @dev Calculates and allocates shares of failed stakes to protocol, client, creator, and winners
-    /// @param _id The commitment ID
-    /// @param _winners Array of addresses that successfully completed the commitment
-    function distributeRewards(uint256 _id, address[] memory _winners) internal {
-        Commitment storage commitment = commitments[_id];
-        
-        // Calculate total stakes from failed participants
-        uint256 totalFailedStake = commitment.failedCount * commitment.stakeAmount;
-        
-        if (totalFailedStake > 0) {
-            // Calculate fee shares based on predefined percentages
-            uint256 protocolFeeAmount = (totalFailedStake * PROTOCOL_SHARE) / 100;    // 1% to protocol
-            uint256 clientFeeAmount = (totalFailedStake * clients[commitment.client].feeShare) / 100;  // Client's share (up to 9%)
-            uint256 creatorAmount = (totalFailedStake * commitment.creatorShare) / 100;  // Creator's share (up to 10%)
+        // Distribute failed stakes among winners
+        if (commitment.failedCount > 0) {
+            uint256 totalFailedStake = commitment.failedCount * commitment.stakeAmount;
             
-            // Remaining amount goes to winners
+            // Calculate fee shares
+            uint256 protocolFeeAmount = (totalFailedStake * PROTOCOL_SHARE) / 100;
+            uint256 clientFeeAmount = (totalFailedStake * clients[commitment.client].feeShare) / 100;
+            uint256 creatorAmount = (totalFailedStake * commitment.creatorShare) / 100;
             uint256 winnerAmount = totalFailedStake - protocolFeeAmount - clientFeeAmount - creatorAmount;
-            
-            // Accumulate protocol and client fees for later withdrawal
-            accumulatedFees[protocolFeeAddress] += protocolFeeAmount;
-            accumulatedFees[clients[commitment.client].feeAddress] += clientFeeAmount;
-            
-            // Assign creator's share immediately
+
+            // Update balances for fees and rewards
+            accumulatedTokenFees[commitment.tokenAddress][protocolFeeAddress] += protocolFeeAmount;
+            accumulatedTokenFees[commitment.tokenAddress][clients[commitment.client].feeAddress] += clientFeeAmount;
             balances[_id][commitment.creator] += creatorAmount;
-            
-            // Distribute remaining funds equally among winners
+
+            // Distribute remaining amount equally among winners
             uint256 amountPerWinner = winnerAmount / _winners.length;
-            uint256 dust = winnerAmount - (amountPerWinner * _winners.length);
-            
             for (uint256 i = 0; i < _winners.length; i++) {
                 balances[_id][_winners[i]] += amountPerWinner;
             }
-            if (dust > 0) {
-                balances[_id][_winners[0]] += dust;  // Give dust to first winner
-            }
         }
+
+        // Mark commitment as resolved
+        commitment.status = CommitmentStatus.Resolved;
+        emit CommitmentResolved(_id, _winners);
     }
 
+	/// @notice Allows creator to cancel a commitment before any participants join
+    /// @param _id The ID of the commitment to cancel
     function cancelCommitment(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) {
         Commitment storage commitment = commitments[_id];
-        require(msg.sender == commitment.creator, "Only creator can cancel");
-        require(!commitment.isResolved && !commitment.isCancelled, "Commitment not active");
-        require(commitment.participants.length == 0, "Cannot cancel with participants");
+        if (msg.sender != commitment.creator) revert UnauthorizedAccess(msg.sender);
+        if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
+        if (commitment.participants.length > 0) revert InvalidState(CommitmentStatus.Cancelled);
 
-        commitment.isCancelled = true;
+        commitment.status = CommitmentStatus.Cancelled;
         emit CommitmentCancelled(_id);
     }
 
-    function claimRewards(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) {
+	/// @notice Claims participant's rewards after resolution
+    /// @param _id The ID of the commitment to claim rewards from
+    function claimRewards(uint256 _id) external nonReentrant commitmentExists(_id) {
         Commitment storage commitment = commitments[_id];
-        require(commitment.isResolved, "Commitment not resolved");
+        if (commitment.status != CommitmentStatus.Resolved) revert InvalidState(commitment.status);
+        if (!hasJoined[_id][msg.sender]) revert UnauthorizedAccess(msg.sender);
 
         uint256 amount = balances[_id][msg.sender];
-        require(amount > 0, "No rewards to claim");
+        if (amount == 0) revert NoRewardsToClaim();
 
+        // Clear balance before transfer to prevent reentrancy
         balances[_id][msg.sender] = 0;
         IERC20(commitment.tokenAddress).safeTransfer(msg.sender, amount);
 
         emit RewardsClaimed(_id, msg.sender, commitment.tokenAddress, amount);
     }
 
+    /*//////////////////////////////////////////////////////////////
+                            CLIENT MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
     // Client registration and management
+    /// @notice Registers a new client with a fee address and share
+    /// @param _feeAddress The address where client fees are sent
+    /// @param _feeShare The percentage of fees the client receives
     function registerClient(address _feeAddress, uint8 _feeShare) external {
-        require(_feeAddress != address(0), "Invalid fee address");
-        require(_feeShare <= MAX_CLIENT_FEE, "Fee share too high");
-        require(!clients[msg.sender].isActive, "Already registered");
+        if (_feeAddress == address(0)) revert InvalidAddress();
+        if (_feeShare > MAX_CLIENT_FEE) revert InvalidState(CommitmentStatus.Cancelled);
+        if (clients[msg.sender].isActive) revert InvalidState(CommitmentStatus.Cancelled);
         
         clients[msg.sender] = Client({
             feeAddress: _feeAddress,
@@ -348,52 +370,56 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
         emit ClientRegistered(msg.sender, _feeAddress, _feeShare);
     }
 
-    // Admin functions
+    /// @notice Deactivates a client, preventing them from participating in new commitments
+    /// @param clientAddress The address of the client to deactivate
+    function deactivateClient(address clientAddress) external onlyOwner {
+        if (!clients[clientAddress].isActive) revert InvalidState(CommitmentStatus.Cancelled);
+        clients[clientAddress].isActive = false;
+        emit ClientDeactivated(clientAddress);
+    }
+
+
+    /*//////////////////////////////////////////////////////////////
+                            ADMIN FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Sets the allowance status of a token for use in commitments
+    /// @param token The address of the token
+    /// @param allowed Whether the token is allowed
     function setAllowedToken(address token, bool allowed) external onlyOwner {
         allowedTokens[token] = allowed;
         emit TokenAllowanceUpdated(token, allowed);
     }
 
+	/// @notice Updates the protocol fee address
+    /// @param _newAddress The new address for protocol fees
     function setProtocolFeeAddress(address _newAddress) external onlyOwner {
         _validateAddress(_newAddress);
         emit ProtocolFeeAddressUpdated(protocolFeeAddress, _newAddress);
         protocolFeeAddress = _newAddress;
     }
 
-    function pause() external onlyOwner {
-        paused = true;
-        emit Paused(msg.sender);
-    }
+   
+    /*//////////////////////////////////////////////////////////////
+                            EMERGENCY FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-    function unpause() external onlyOwner {
-        paused = false;
-        emit Unpaused(msg.sender);
-    }
-
-    // Emergency function
-    function emergencyWithdraw(IERC20 token) external onlyOwner {
-        uint256 balance = token.balanceOf(address(this));
-        token.safeTransfer(msg.sender, balance);
-        emit EmergencyWithdrawal(address(token), balance);
-    }
-
+    /// @notice Emergency withdrawal of stuck tokens
+    /// @param token The address of the token to withdraw
+    /// @param amount The amount of tokens to withdraw
     function emergencyWithdrawToken(IERC20 token, uint256 amount) external onlyOwner {
-        require(amount > 0, "Amount must be positive");
-        require(amount <= token.balanceOf(address(this)), "Insufficient balance");
+        if (amount == 0) revert InsufficientBalance(0, amount);
+        if (amount > token.balanceOf(address(this))) revert InsufficientBalance(token.balanceOf(address(this)), amount);
         token.safeTransfer(msg.sender, amount);
         emit EmergencyWithdrawal(address(token), amount);
     }
 
     /// @notice Emergency function to resolve stuck commitments
-    /// @dev Can only be called by owner after deadline or when contract is paused
     /// @param _id The commitment ID to resolve
     function emergencyResolveCommitment(uint256 _id) external onlyOwner {
         Commitment storage commitment = commitments[_id];
-        require(!commitment.isResolved && !commitment.isCancelled, "Invalid state");
-        require(
-            block.timestamp > commitment.fulfillmentDeadline || paused,
-            "Can only emergency resolve after deadline or when paused"
-        );
+        if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
+        if (block.timestamp <= commitment.fulfillmentDeadline && !paused) revert FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline);
 
         // Return all stakes to original participants
         for (uint256 i = 0; i < commitment.participants.length; i++) {
@@ -406,51 +432,79 @@ contract CommitProtocol is ReentrancyGuard, Ownable {
             }
         }
         
-        commitment.isResolved = true;
+        commitment.status = CommitmentStatus.Resolved;
+        emit CommitmentEmergencyResolved(_id);
     }
 
-    function withdrawAccumulatedFees() external nonReentrant {
-        uint256 amount = accumulatedFees[msg.sender];
-        require(amount > 0, "No fees to withdraw");
-        accumulatedFees[msg.sender] = 0;
-        (bool success, ) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
-    }
-
-    function deactivateClient(address clientAddress) external onlyOwner {
-        require(clients[clientAddress].isActive, "Client not active");
-        clients[clientAddress].isActive = false;
-        emit ClientDeactivated(clientAddress);
-    }
-
-    receive() external payable {
-        revert("Direct deposits not allowed");
-    }
-
-    // At the contract level
-    error InvalidAddress();
-    error UnauthorizedAccess();
-    error DeadlineExpired();
-
-    // Add emergency pause for specific commitment
+    /// @notice Emergency function to pause a specific commitment
+    /// @param _id The ID of the commitment to pause
     function emergencyPauseCommitment(uint256 _id) external onlyOwner commitmentExists(_id) {
         Commitment storage commitment = commitments[_id];
-        require(!commitment.isResolved && !commitment.isCancelled, "Invalid state");
-        commitment.isCancelled = true;
+        if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
+        commitment.status = CommitmentStatus.Cancelled;
         emit CommitmentEmergencyPaused(_id);
     }
+
+    /*//////////////////////////////////////////////////////////////
+                            VIEW FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function getCommitmentDetails(uint256 _id) external view returns (
+        address creator,
+        address client,
+        uint256 stakeAmount,
+        uint256 joinFee,
+        uint256 participantCount,
+        CommitmentStatus status,
+        uint256 timeRemaining
+    ) {
+        Commitment storage c = commitments[_id];
+        return (
+            c.creator,
+            c.client,
+            c.stakeAmount,
+            c.joinFee,
+            c.participants.length,
+            c.status,
+            c.joinDeadline > block.timestamp ? c.joinDeadline - block.timestamp : 0
+        );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            INTERNAL FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
     function _validateAddress(address addr) internal pure {
         if (addr == address(0)) revert InvalidAddress();
     }
 
-    /// @notice Withdraw accumulated token fees
-    /// @param token The token address to withdraw
-    function withdrawAccumulatedTokenFees(address token) external nonReentrant {
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+        if (newImplementation == address(0)) revert InvalidAddress();
+    }
+
+    /// @notice Claims accumulated fees for a specific token. Used by protocol owner and clients to withdraw their fees
+    /// @param token The address of the token to claim fees for
+    /// @dev Protocol owner claims via protocolFeeAddress, clients claim via their registered feeAddress
+    /// @dev Protocol fees come from join fees (PROTOCOL_SHARE%) and failed stakes (PROTOCOL_SHARE%)
+    /// @dev Client fees come from join fees (feeShare%) and failed stakes (feeShare%)
+    function claimAccumulatedFees(address token) external nonReentrant {
         uint256 amount = accumulatedTokenFees[token][msg.sender];
-        require(amount > 0, "No token fees to withdraw");
+        if (amount == 0) revert NoRewardsToClaim();
         
+        // Clear balance before transfer to prevent reentrancy
         accumulatedTokenFees[token][msg.sender] = 0;
+        
+        // Transfer accumulated fees
         IERC20(token).safeTransfer(msg.sender, amount);
+        
+        emit FeesClaimed(msg.sender, token, amount);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            FALLBACK FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    receive() external payable {
+        revert("Direct deposits not allowed");
     }
 }
