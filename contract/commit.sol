@@ -23,10 +23,11 @@ contract CommitProtocol is
                                 STRUCTS
     //////////////////////////////////////////////////////////////*/
 
+    /// @notice Client represents an integrated application or platform using the Commit Protocol
     struct Client {
-        address feeAddress;
-        uint8 feeShare;
-        bool isActive;
+        address feeAddress;    // Address where client's fee share is sent
+        uint8 feeShare;        // Percentage of fees client receives (0-9%)
+        bool isActive;         // Whether users can create commitments through this client
     }
 
     struct Commitment {
@@ -174,6 +175,7 @@ contract CommitProtocol is
     /// @param _joinDeadline The deadline for participants to join
     /// @param _fulfillmentDeadline The deadline for fulfilling the commitment
     /// @param _client The address of the client associated with the commitment
+    /// @dev Creator becomes first participant by staking tokens + paying creation fee in ETH
     function createCommitment(
         address _tokenAddress,
         uint256 _stakeAmount,
@@ -199,6 +201,9 @@ contract CommitProtocol is
         (bool sent,) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
         if (!sent) revert ETHTransferFailed();
 
+        // Transfer only stake amount for creator (no join fee)
+        IERC20(_tokenAddress).safeTransferFrom(msg.sender, address(this), _stakeAmount);
+
         uint256 commitmentId = nextCommitmentId++;
         Commitment storage commitment = commitments[commitmentId];
         
@@ -214,6 +219,11 @@ contract CommitProtocol is
         commitment.joinDeadline = _joinDeadline;
         commitment.fulfillmentDeadline = _fulfillmentDeadline;
 
+        // Make creator the first participant with their stake amount
+        commitment.participants.push(msg.sender);
+        hasJoined[commitmentId][msg.sender] = true;
+        balances[commitmentId][msg.sender] = _stakeAmount;
+
         emit CommitmentCreated(
             commitmentId,
             msg.sender,
@@ -223,6 +233,7 @@ contract CommitProtocol is
             _joinFee,
             _creatorShare
         );
+        emit CommitmentJoined(commitmentId, msg.sender);
     }
 
   	/// @notice Allows joining an active commitment
@@ -269,7 +280,7 @@ contract CommitProtocol is
     /// @param _winners The addresses of the participants who succeeded
     function resolveCommitment(uint256 _id, address[] calldata _winners) external nonReentrant whenNotPaused commitmentExists(_id) {
         Commitment storage commitment = commitments[_id];
-        if (msg.sender != commitment.creator && msg.sender != owner()) revert UnauthorizedAccess(msg.sender);
+        if (msg.sender != commitment.creator) revert UnauthorizedAccess(msg.sender);
         if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
         if (block.timestamp < commitment.fulfillmentDeadline) revert FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline);
         if (_winners.length == 0) revert InvalidState(CommitmentStatus.Resolved);
@@ -319,11 +330,12 @@ contract CommitProtocol is
         emit CommitmentResolved(_id, _winners);
     }
 
-	/// @notice Allows creator to cancel a commitment before any participants join
+	/// @notice Allows creator or owner to cancel a commitment before any participants join
     /// @param _id The ID of the commitment to cancel
-    function cancelCommitment(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) {
+    function cancelCommitment(uint256 _id) external nonReentrant commitmentExists(_id) {
         Commitment storage commitment = commitments[_id];
-        if (msg.sender != commitment.creator) revert UnauthorizedAccess(msg.sender);
+        // Allow both creator and owner to cancel
+        if (msg.sender != commitment.creator && msg.sender != owner()) revert UnauthorizedAccess(msg.sender);
         if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
         if (commitment.participants.length > 0) revert InvalidState(CommitmentStatus.Cancelled);
 
@@ -331,9 +343,11 @@ contract CommitProtocol is
         emit CommitmentCancelled(_id);
     }
 
-	/// @notice Claims participant's rewards after resolution
-    /// @param _id The ID of the commitment to claim rewards from
-    function claimRewards(uint256 _id) external nonReentrant commitmentExists(_id) {
+	/// @notice Claims participant's rewards and stakes after commitment resolution
+    /// @dev Winners can claim their original stake plus their share of rewards from failed stakes
+    /// @dev Losers cannot claim anything as their stakes are distributed to winners
+    /// @param _id The commitment ID to claim rewards from
+    function claimRewards(uint256 _id) external nonReentrant {
         Commitment storage commitment = commitments[_id];
         if (commitment.status != CommitmentStatus.Resolved) revert InvalidState(commitment.status);
         if (!hasJoined[_id][msg.sender]) revert UnauthorizedAccess(msg.sender);
@@ -356,7 +370,7 @@ contract CommitProtocol is
     /// @notice Registers a new client with a fee address and share
     /// @param _feeAddress The address where client fees are sent
     /// @param _feeShare The percentage of fees the client receives
-    function registerClient(address _feeAddress, uint8 _feeShare) external {
+    function registerClient(address _feeAddress, uint8 _feeShare) external whenNotPaused {
         if (_feeAddress == address(0)) revert InvalidAddress();
         if (_feeShare > MAX_CLIENT_FEE) revert InvalidState(CommitmentStatus.Cancelled);
         if (clients[msg.sender].isActive) revert InvalidState(CommitmentStatus.Cancelled);
@@ -438,7 +452,7 @@ contract CommitProtocol is
 
     /// @notice Emergency function to pause a specific commitment
     /// @param _id The ID of the commitment to pause
-    function emergencyPauseCommitment(uint256 _id) external onlyOwner commitmentExists(_id) {
+    function emergencyPauseCommitment(uint256 _id) external onlyOwner {
         Commitment storage commitment = commitments[_id];
         if (commitment.status != CommitmentStatus.Active) revert InvalidState(commitment.status);
         commitment.status = CommitmentStatus.Cancelled;
