@@ -37,7 +37,7 @@ contract CommitProtocol is
         address tokenAddress;
         uint256 stakeAmount;
         uint256 joinFee;
-        uint8 creatorShare;
+        uint16 creatorShare;
         string description;
         address[] participants;
         mapping(address => bool) participantSuccess;
@@ -54,9 +54,10 @@ contract CommitProtocol is
     //////////////////////////////////////////////////////////////*/
 
     uint256 public constant COMMIT_CREATION_FEE = 0.001 ether;  // 0.001 ETH
-    uint8 public constant PROTOCOL_SHARE = 1;      // 1% protocol fee
-    uint8 public constant MAX_CLIENT_FEE = 9;      // Max 9% client fee
-    uint8 public constant MAX_CREATOR_SHARE = 10;  // Max 10% creator share
+    uint16 public constant BASIS_POINTS = 10000;        // 100% = 10000
+    uint16 public constant PROTOCOL_SHARE = 100;        // 1% = 100 bps
+    uint16 public constant MAX_CLIENT_FEE = 900;        // 9% = 900 bps
+    uint16 public constant MAX_CREATOR_SHARE = 1000;    // 10% = 1000 bps
     uint256 public constant MAX_DESCRIPTION_LENGTH = 1000;    // Characters
     uint256 public constant MAX_DEADLINE_DURATION = 365 days; // Max time window
 		
@@ -86,7 +87,7 @@ contract CommitProtocol is
         address tokenAddress,
         uint256 stakeAmount,
         uint256 joinFee,
-        uint8 creatorShare
+        uint16 creatorShare
     );
     event CommitmentJoined(uint256 indexed id, address indexed participant);
     event CommitmentResolved(uint256 indexed id, address[] winners);
@@ -184,7 +185,7 @@ contract CommitProtocol is
         address _tokenAddress,
         uint256 _stakeAmount,
         uint256 _joinFee,
-        uint8 _creatorShare,
+        uint16 _creatorShare,
         string calldata _description,
         uint256 _joinDeadline,
         uint256 _fulfillmentDeadline,
@@ -252,8 +253,8 @@ contract CommitProtocol is
         
         // Handle join fee if set
         if (commitment.joinFee > 0) {
-            uint256 protocolShare = (commitment.joinFee * PROTOCOL_SHARE) / 100;
-            uint256 clientShare = (commitment.joinFee * clients[commitment.client].feeShare) / 100;
+            uint256 protocolShare = (commitment.joinFee * PROTOCOL_SHARE) / BASIS_POINTS;
+            uint256 clientShare = (commitment.joinFee * clients[commitment.client].feeShare) / BASIS_POINTS;
             uint256 creatorShare = commitment.joinFee - protocolShare - clientShare;
 
             totalAmount += commitment.joinFee;
@@ -312,9 +313,9 @@ contract CommitProtocol is
             uint256 totalFailedStake = commitment.failedCount * commitment.stakeAmount;
             
             // Calculate fee shares
-            uint256 protocolFeeAmount = (totalFailedStake * PROTOCOL_SHARE) / 100;
-            uint256 clientFeeAmount = (totalFailedStake * clients[commitment.client].feeShare) / 100;
-            uint256 creatorAmount = (totalFailedStake * commitment.creatorShare) / 100;
+            uint256 protocolFeeAmount = (totalFailedStake * PROTOCOL_SHARE) / BASIS_POINTS;
+            uint256 clientFeeAmount = (totalFailedStake * clients[commitment.client].feeShare) / BASIS_POINTS;
+            uint256 creatorAmount = (totalFailedStake * commitment.creatorShare) / BASIS_POINTS;
             uint256 winnerAmount = totalFailedStake - protocolFeeAmount - clientFeeAmount - creatorAmount;
 
             // Update balances for fees and rewards
