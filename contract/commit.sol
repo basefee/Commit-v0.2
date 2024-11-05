@@ -41,7 +41,9 @@ contract CommitProtocol is
         address tokenAddress;      // Token used for staking
         uint256 stakeAmount;      // Amount each participant must stake
         uint256 joinFee;          // (Optional) fee to join (distributed between protocol, client, creator)
+        //TODO: why is this uint16 and not uint8? like Client.feeShare?
         uint16 creatorShare;       // (Optional) creator's share of failed stakes
+        //TODO: consider using Poster.sol or IPFS for string data, storing the string on chain is unnecessary and expensive
         string description;        // Description of the commitment
         mapping(address => bool) participantSuccess;  // Tracks who succeeded
         CommitmentStatus status;   // Current state (Active/Resolved/Cancelled)
@@ -62,6 +64,8 @@ contract CommitProtocol is
     uint16 public constant MAX_CLIENT_FEE = 900;        // 9% = 900 bps
     uint16 public constant MAX_CREATOR_SHARE = 1000;    // 10% = 1000 bps
     uint256 public constant MAX_DESCRIPTION_LENGTH = 1000;    // Characters
+    //TODO: some of these limits feel a bit arbitrary, consider revising to let the user set these limits
+    // For example, protocol_share is fair to determine on the builder side
     uint256 public constant MAX_DEADLINE_DURATION = 365 days; // Max time window
 		
     /*//////////////////////////////////////////////////////////////
@@ -75,6 +79,7 @@ contract CommitProtocol is
     mapping(address => bool) public allowedTokens;
     mapping(address => Client) public clients;
     mapping(uint256 => Commitment) public commitments;
+    // TODO: isn't this mapping redundant with commitmentParticipants?
     mapping(uint256 => mapping(address => bool)) public hasJoined;
     mapping(uint256 => mapping(address => uint256)) public balances;
     mapping(address => mapping(address => uint256)) public accumulatedTokenFees;
@@ -136,6 +141,7 @@ contract CommitProtocol is
     /*//////////////////////////////////////////////////////////////
                                 MODIFIERS
     //////////////////////////////////////////////////////////////*/
+
 
     modifier whenNotPaused() {
         require(!paused, ContractPaused());
