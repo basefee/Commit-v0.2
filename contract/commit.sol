@@ -50,7 +50,7 @@ contract CommitProtocol is
         uint256 fulfillmentDeadline;  // Deadline to fulfill commitment
     }
 
-    enum CommitmentStatus { Active, Resolved, Cancelled }
+    enum CommitmentStatus { Active, Resolved, Cancelled, EmergencyResolved }
 
     /*//////////////////////////////////////////////////////////////
                                 CONSTANTS
@@ -457,18 +457,7 @@ contract CommitProtocol is
         require(block.timestamp > commitment.fulfillmentDeadline || paused, 
             FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
 
-        // Return all stakes to original participants
-        for (uint256 i = 0; i < commitment.participants.length; i++) {
-            address participant = commitment.participants[i];
-            uint256 amount = balances[_id][participant];
-            if (amount > 0) {
-                // Clear balance before transfer to prevent reentrancy
-                balances[_id][participant] = 0;
-                IERC20(commitment.tokenAddress).safeTransfer(participant, amount);
-            }
-        }
-        
-        commitment.status = CommitmentStatus.Resolved;
+        commitment.status = CommitmentStatus.EmergencyResolved;
         emit CommitmentEmergencyResolved(_id);
     }
 
