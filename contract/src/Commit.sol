@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
+//TODO: added basic test file
+
+// TODO: Added @openzeppelin packages to NPM
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /// @title CommitProtocol — an onchain accountability protocol
 /// @notice Enables users to create and participate in commitment-based challenges
 /// @dev Implements stake management, fee distribution, and emergency controls
-contract CommitProtocol is 
-    UUPSUpgradeable, 
-    ReentrancyGuardUpgradeable, 
-    OwnableUpgradeable, 
-    PausableUpgradeable 
+contract CommitProtocol is
+UUPSUpgradeable,
+ReentrancyGuardUpgradeable,
+OwnableUpgradeable,
+PausableUpgradeable
 {
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
@@ -52,7 +55,7 @@ contract CommitProtocol is
         uint256 fulfillmentDeadline;  // Deadline to fulfill commitment
     }
 
-    enum CommitmentStatus { Active, Resolved, Cancelled }
+    enum CommitmentStatus {Active, Resolved, Cancelled}
 
     /*//////////////////////////////////////////////////////////////
                                 CONSTANTS
@@ -67,7 +70,7 @@ contract CommitProtocol is
     //TODO: some of these limits feel a bit arbitrary, consider revising to let the user set these limits
     // For example, protocol_share is fair to determine on the builder side
     uint256 public constant MAX_DEADLINE_DURATION = 365 days; // Max time window
-		
+
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
@@ -142,20 +145,25 @@ contract CommitProtocol is
                                 MODIFIERS
     //////////////////////////////////////////////////////////////*/
 
-
-    modifier whenNotPaused() {
-        require(!paused, ContractPaused());
-        _;
-    }
+    // TOD: I think this modifier is not needed, as it's already in the PausableUpgradeable contract
+//    modifier whenNotPaused() {
+//        require(!paused, ContractPaused());
+//        _;
+//    }
 
     modifier commitmentExists(uint256 _id) {
-        require(_id < nextCommitmentId, CommitmentNotExists(_id));
+        // TODO: use custom errors for consistency and gas savings
+        if (_id >= nextCommitmentId) {
+            revert CommitmentNotExists(_id);
+        }
         _;
     }
 
     modifier withinJoinPeriod(uint256 _id) {
-        require(block.timestamp <= commitments[_id].joinDeadline, 
-            JoiningPeriodEnded(block.timestamp, commitments[_id].joinDeadline));
+        // TODO: use custom errors for consistency and gas savings
+        if (block.timestamp > commitments[_id].joinDeadline) {
+            revert JoiningPeriodEnded(block.timestamp, commitments[_id].joinDeadline);
+        }
         _;
     }
 
@@ -171,11 +179,16 @@ contract CommitProtocol is
     /// @notice Initializes the contract with the protocol fee address
     /// @param _protocolFeeAddress The address where protocol fees are sent
     function initialize(address _protocolFeeAddress) public initializer {
-        __Ownable_init();
+        // TODO: added missing parameter
+        __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
         __Pausable_init();
-        require(_protocolFeeAddress != address(0), InvalidAddress());
+        // TODO: use negation for custom errors https://soliditylang.org/blog/2021/04/21/custom-errors/
+        if(_protocolFeeAddress == address(0)) {
+            revert InvalidAddress();
+        }
+//        require(_protocolFeeAddress != address(0), InvalidAddress());
         protocolFeeAddress = _protocolFeeAddress;
     }
 
@@ -183,7 +196,7 @@ contract CommitProtocol is
                         COMMITMENT CORE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-	/// @notice Creates a commitment with specified parameters and stake requirements
+    /// @notice Creates a commitment with specified parameters and stake requirements
     /// @param _tokenAddress The address of the ERC20 token used for staking
     /// @param _stakeAmount The amount each participant must stake
     /// @param _joinFee The fee required to join the commitment
@@ -203,6 +216,10 @@ contract CommitProtocol is
         uint256 _fulfillmentDeadline,
         address _client
     ) external payable nonReentrant whenNotPaused {
+
+        // TODO: this is a big 'if' with multiple checks leading to the same error. Maybe split it up, create a modifier, or use internal functions
+        // TODO: see other comments on custom errors and using negation
+
         require(msg.value == COMMIT_CREATION_FEE, InvalidCreationFee(msg.value, COMMIT_CREATION_FEE));
         require(allowedTokens[_tokenAddress], TokenNotAllowed(_tokenAddress));
         require(clients[_client].isActive, InvalidState(CommitmentStatus.Cancelled));
@@ -214,16 +231,21 @@ contract CommitProtocol is
         require(_stakeAmount > 0, InvalidState(CommitmentStatus.Cancelled));
         require(_joinFee >= PROTOCOL_SHARE + clients[_client].feeShare, InvalidState(CommitmentStatus.Cancelled));
 
-		// Transfer creation fee in ETH
+        // Transfer creation fee in ETH
         (bool sent,) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
-        require(sent, ETHTransferFailed());
+        // TODO: use custom errors for consistency and gas savings
+        if (!sent) {
+            revert ETHTransferFailed();
+        }
+//        require(sent, ETHTransferFailed());
 
         // Transfer only stake amount for creator (no join fee)
         IERC20(_tokenAddress).safeTransferFrom(msg.sender, address(this), _stakeAmount);
 
         uint256 commitmentId = nextCommitmentId++;
+        // TODO: compare the gas cost of 1) creating in memory and pushing to storage, 2) creating in storage and updating variables and 3) initializing the struct in storage but in-line (e.g. commitments[commitmentId] = Commitment({id: commitmentId, ...}))
         Commitment storage commitment = commitments[commitmentId];
-        
+
         // Initialize commitment details
         commitment.id = commitmentId;
         commitment.creator = msg.sender;
@@ -238,6 +260,7 @@ contract CommitProtocol is
 
         // Make creator the first participant with their stake amount
         commitment.participants.push(msg.sender);
+        // TODO: isn't this redundant as the participants set in the row above has the same information?
         hasJoined[commitmentId][msg.sender] = true;
         balances[commitmentId][msg.sender] = _stakeAmount;
 
@@ -253,16 +276,26 @@ contract CommitProtocol is
         emit CommitmentJoined(commitmentId, msg.sender);
     }
 
-  	/// @notice Allows joining an active commitment
+    /// @notice Allows joining an active commitment
     /// @param _id The ID of the commitment to join
     function joinCommitment(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) withinJoinPeriod(_id) {
+        // TODO: load this after the next check, if it reverts you can skip the load.
         Commitment storage commitment = commitments[_id];
-        require(!hasJoined[_id][msg.sender], AlreadyJoined());
-        require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
+
+        // TODO: use custom errors for consistency and gas savings
+        if (hasJoined[_id][msg.sender]) {
+            revert AlreadyJoined();
+        }
+        if (commitment.status != CommitmentStatus.Active) {
+            revert InvalidState(commitment.status);
+        }
+
+//        require(!hasJoined[_id][msg.sender], AlreadyJoined());
+//        require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
 
         // Calculate total amount needed (stake + join fee)
         uint256 totalAmount = commitment.stakeAmount;
-        
+
         // Handle join fee if set
         if (commitment.joinFee > 0) {
             uint256 protocolShare = (commitment.joinFee * PROTOCOL_SHARE) / BASIS_POINTS;
@@ -270,7 +303,7 @@ contract CommitProtocol is
             uint256 creatorShare = commitment.joinFee - protocolShare - clientShare;
 
             totalAmount += commitment.joinFee;
-            
+
             // Update accumulated token fees
             accumulatedTokenFees[commitment.tokenAddress][protocolFeeAddress] += protocolShare;
             accumulatedTokenFees[commitment.tokenAddress][clients[commitment.client].feeAddress] += clientShare;
@@ -296,29 +329,50 @@ contract CommitProtocol is
     /// @param _id The ID of the commitment to resolve
     /// @param _winners The addresses of the participants who succeeded
     /// @dev Only creator can resolve, must be after fulfillment deadline
+    // TODO: consider CHECKS-EFFECTS-INTERACTIONS pattern https://fravoll.github.io/solidity-patterns/checks_effects_interactions.html
     function resolveCommitment(uint256 _id, address[] calldata _winners) external nonReentrant whenNotPaused {
         Commitment storage commitment = commitments[_id];
-        require(msg.sender == commitment.creator, UnauthorizedAccess(msg.sender));
-        require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
-        require(block.timestamp >= commitment.fulfillmentDeadline, 
-            FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
+        // TODO: use custom errors for consistency and gas savings
+        if (msg.sender != commitment.creator) {
+            revert UnauthorizedAccess(msg.sender);
+        }
+        if (commitment.status != CommitmentStatus.Active) {
+            revert InvalidState(commitment.status);
+        }
+        if (block.timestamp < commitment.fulfillmentDeadline) {
+            revert FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline);
+        }
 
+//        require(msg.sender == commitment.creator, UnauthorizedAccess(msg.sender));
+//        require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
+//        require(block.timestamp >= commitment.fulfillmentDeadline,
+//            FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
+//
         // Cache lengths for gas 
         uint256 winnersLength = _winners.length;
         uint256 participantCount = commitmentParticipants[_id].length();
-        require(winnersLength > 0 && winnersLength <= participantCount, 
-            InvalidState(CommitmentStatus.Resolved));
 
+        // TODO: use custom errors for consistency and gas savings
+        if (winnersLength == 0 || winnersLength > participantCount) {
+            revert InvalidState(CommitmentStatus.Resolved);
+        }
+//        require(winnersLength > 0 && winnersLength <= participantCount,
+//            InvalidState(CommitmentStatus.Resolved));
+
+        // TODO: why use a mapping here?
         mapping(address => bool) memory isWinner;
         for (uint256 i = 0; i < winnersLength; i++) {
             address winner = _winners[i];
+
             require(!isWinner[winner], DuplicateWinner(winner));
             require(commitmentParticipants[_id].contains(winner), InvalidWinner(winner));
             isWinner[winner] = true;
         }
-       
-       // Process participants
+
+        // Process participants
         commitment.failedCount = 0;
+        // TODO: if you're going to loop over all the participants, could you do the `isWinner` checks here as well?
+        // TODO: The isWinner to participantSuccess mapping is redundant, could you just do that in the loop?
         for (uint256 i = 0; i < participantCount; i++) {
             address participant = commitmentParticipants[_id].at(i);
             bool won = isWinner[participant];
@@ -329,7 +383,7 @@ contract CommitProtocol is
         // Distribute failed stakes among winners
         if (commitment.failedCount > 0) {
             uint256 totalFailedStake = commitment.failedCount * commitment.stakeAmount;
-            
+
             // Calculate fee shares
             uint256 protocolFeeAmount = (totalFailedStake * PROTOCOL_SHARE) / BASIS_POINTS;
             uint256 clientFeeAmount = (totalFailedStake * clients[commitment.client].feeShare) / BASIS_POINTS;
@@ -353,11 +407,11 @@ contract CommitProtocol is
         emit CommitmentResolved(_id, _winners);
     }
 
-	/// @notice Allows creator or owner to cancel a commitment before any participants join
+    /// @notice Allows creator or owner to cancel a commitment before any participants join
     /// @param _id The ID of the commitment to cancel
     function cancelCommitment(uint256 _id) external nonReentrant {
         require(_id < nextCommitmentId, CommitmentNotExists(_id));
-        
+
         Commitment storage commitment = commitments[_id];
         require(msg.sender == commitment.creator || msg.sender == owner(), UnauthorizedAccess(msg.sender));
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
@@ -367,7 +421,7 @@ contract CommitProtocol is
         emit CommitmentCancelled(_id);
     }
 
-	/// @notice Claims participant's rewards and stakes after commitment resolution
+    /// @notice Claims participant's rewards and stakes after commitment resolution
     /// @dev Winners can claim their original stake plus their share of rewards from failed stakes
     /// @dev Losers cannot claim anything as their stakes are distributed to winners
     /// @param _id The commitment ID to claim rewards from
@@ -398,13 +452,13 @@ contract CommitProtocol is
         require(_feeAddress != address(0), InvalidAddress());
         require(_feeShare <= MAX_CLIENT_FEE, InvalidState(CommitmentStatus.Cancelled));
         require(!clients[msg.sender].isActive, InvalidState(CommitmentStatus.Cancelled));
-        
+
         clients[msg.sender] = Client({
             feeAddress: _feeAddress,
             feeShare: _feeShare,
             isActive: true
         });
-        
+
         emit ClientRegistered(msg.sender, _feeAddress, _feeShare);
     }
 
@@ -415,7 +469,6 @@ contract CommitProtocol is
         clients[clientAddress].isActive = false;
         emit ClientDeactivated(clientAddress);
     }
-
 
     /*//////////////////////////////////////////////////////////////
                             ADMIN FUNCTIONS
@@ -429,17 +482,16 @@ contract CommitProtocol is
         emit TokenAllowanceUpdated(token, allowed);
     }
 
-	/// @notice Updates the protocol fee address
+    /// @notice Updates the protocol fee address
     /// @param _newAddress The new address for protocol fees
     function setProtocolFeeAddress(address _newAddress) external onlyOwner {
         require(_newAddress != address(0), InvalidAddress());
-        
+
         address oldAddress = protocolFeeAddress;
         protocolFeeAddress = _newAddress;
         emit ProtocolFeeAddressUpdated(oldAddress, _newAddress);
     }
 
-   
     /*//////////////////////////////////////////////////////////////
                             EMERGENCY FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -449,7 +501,7 @@ contract CommitProtocol is
     /// @param amount The amount of tokens to withdraw
     function emergencyWithdrawToken(IERC20 token, uint256 amount) external onlyOwner {
         require(amount > 0, InsufficientBalance(0, amount));
-        require(amount <= token.balanceOf(address(this)), 
+        require(amount <= token.balanceOf(address(this)),
             InsufficientBalance(token.balanceOf(address(this)), amount));
         token.safeTransfer(msg.sender, amount);
         emit EmergencyWithdrawal(address(token), amount);
@@ -460,7 +512,7 @@ contract CommitProtocol is
     function emergencyResolveCommitment(uint256 _id) external onlyOwner {
         Commitment storage commitment = commitments[_id];
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
-        require(block.timestamp > commitment.fulfillmentDeadline || paused, 
+        require(block.timestamp > commitment.fulfillmentDeadline || paused,
             FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
 
         // Return all stakes to original participants
@@ -473,7 +525,7 @@ contract CommitProtocol is
                 IERC20(commitment.tokenAddress).safeTransfer(participant, amount);
             }
         }
-        
+
         commitment.status = CommitmentStatus.Resolved;
         emit CommitmentEmergencyResolved(_id);
     }
@@ -483,7 +535,7 @@ contract CommitProtocol is
     function emergencyPauseCommitment(uint256 _id) external onlyOwner {
         Commitment storage commitment = commitments[_id];
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
-        
+
         commitment.status = CommitmentStatus.Cancelled;
         emit CommitmentEmergencyPaused(_id);
     }
@@ -543,13 +595,13 @@ contract CommitProtocol is
     function claimAccumulatedFees(address token) external nonReentrant {
         uint256 amount = accumulatedTokenFees[token][msg.sender];
         require(amount > 0, NoRewardsToClaim());
-        
+
         // Clear balance before transfer to prevent reentrancy
         accumulatedTokenFees[token][msg.sender] = 0;
-        
+
         // Transfer accumulated fees
         IERC20(token).safeTransfer(msg.sender, amount);
-        
+
         emit FeesClaimed(msg.sender, token, amount);
     }
 

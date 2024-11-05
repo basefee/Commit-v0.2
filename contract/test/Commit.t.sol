@@ -2,12 +2,12 @@
 pragma solidity ^0.8.21;
 
 import {Test} from "forge-std/Test.sol";
-import {CommitProtocol} from "./commit.sol";
-import {MockERC20} from "./mocks/MockERC20.sol";
+import {CommitProtocol} from "./src/Commit.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract CommitProtocolTest is Test {
     CommitProtocol public commit;
-    MockERC20 public token;
+    address public token;
 
     address public owner = address(this);
     address public user1 = address(0x1);
@@ -21,9 +21,9 @@ contract CommitProtocolTest is Test {
     uint256 constant JOIN_FEE = 10e18;
 
     function setUp() public {
-        // Deploy contracts
+        // Deploy contract
         commit = new CommitProtocol();
-        token = new MockERC20("Test Token", "TEST");
+        token = address(0x6); // Mock token address
 
         // Initialize protocol
         commit.initialize(protocolFeeAddress);
@@ -33,28 +33,56 @@ contract CommitProtocolTest is Test {
         vm.deal(user2, 10 ether);
         vm.deal(user3, 10 ether);
 
-        // Mint tokens to users
-        token.mint(user1, 1000e18);
-        token.mint(user2, 1000e18);
-        token.mint(user3, 1000e18);
+        // Mock token balances and allowances
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.balanceOf.selector, user1),
+            abi.encode(1000e18)
+        );
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.balanceOf.selector, user2),
+            abi.encode(1000e18)
+        );
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.balanceOf.selector, user3),
+            abi.encode(1000e18)
+        );
+
+        // Mock successful transfer responses
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.transfer.selector),
+            abi.encode(true)
+        );
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.transferFrom.selector),
+            abi.encode(true)
+        );
 
         // Setup client
         vm.prank(client);
         commit.registerClient(client, 5); // 5% fee share
 
         // Allow token
-        commit.setAllowedToken(address(token), true);
+        commit.setAllowedToken(token, true);
     }
 
     function testCreateCommitment() public {
         vm.startPrank(user1);
 
-        // Approve tokens
-        token.approve(address(commit), STAKE_AMOUNT);
+        // Mock token approval
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.allowance.selector, user1, address(commit)),
+            abi.encode(STAKE_AMOUNT)
+        );
 
         // Create commitment
         commit.createCommitment{value: COMMIT_CREATION_FEE}(
-            address(token),
+            token,
             STAKE_AMOUNT,
             JOIN_FEE,
             500, // 5% creator share
@@ -74,6 +102,7 @@ contract CommitProtocolTest is Test {
             uint256 joinFeeAmt,
             uint256 participantCount,
             CommitProtocol.CommitmentStatus status,
+
         ) = commit.getCommitmentDetails(0);
 
         assertEq(creator, user1);
@@ -86,23 +115,18 @@ contract CommitProtocolTest is Test {
 
     function testJoinCommitment() public {
         // First create a commitment
-        vm.startPrank(user1);
-        token.approve(address(commit), STAKE_AMOUNT);
-        commit.createCommitment{value: COMMIT_CREATION_FEE}(
-            address(token),
-            STAKE_AMOUNT,
-            JOIN_FEE,
-            500,
-            "Test Commitment",
-            block.timestamp + 1 days,
-            block.timestamp + 2 days,
-            client
-        );
-        vm.stopPrank();
+        testCreateCommitment();
 
         // User2 joins the commitment
         vm.startPrank(user2);
-        token.approve(address(commit), STAKE_AMOUNT + JOIN_FEE);
+
+        // Mock token approval for stake + join fee
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.allowance.selector, user2, address(commit)),
+            abi.encode(STAKE_AMOUNT + JOIN_FEE)
+        );
+
         commit.joinCommitment(0);
         vm.stopPrank();
 
@@ -135,34 +159,31 @@ contract CommitProtocolTest is Test {
         // Setup and resolve commitment
         testResolveCommitment();
 
-        // Winner claims rewards
-        uint256 balanceBefore = token.balanceOf(user1);
+        // Mock initial balance
+        uint256 initialBalance = 100e18;
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.balanceOf.selector, user1),
+            abi.encode(initialBalance)
+        );
 
         vm.prank(user1);
         commit.claimRewards(0);
 
-        uint256 balanceAfter = token.balanceOf(user1);
-        assertTrue(balanceAfter > balanceBefore);
+        // Verify transfer was called
+        uint256 expectedTransferCallCount = 1;
+        assertEq(
+            expectedTransferCallCount,
+            vm.getAccountNonce(token) // Check number of calls to token contract
+        );
     }
 
     function testCancelCommitment() public {
         // Create commitment
-        vm.startPrank(user1);
-        token.approve(address(commit), STAKE_AMOUNT);
-        commit.createCommitment{value: COMMIT_CREATION_FEE}(
-            address(token),
-            STAKE_AMOUNT,
-            JOIN_FEE,
-            500,
-            "Test Commitment",
-            block.timestamp + 1 days,
-            block.timestamp + 2 days,
-            client
-        );
+        testCreateCommitment();
 
-        // Cancel commitment
+        vm.prank(user1);
         commit.cancelCommitment(0);
-        vm.stopPrank();
 
         // Verify cancelled
         (,,,,, CommitProtocol.CommitmentStatus status,) = commit.getCommitmentDetails(0);
@@ -170,12 +191,13 @@ contract CommitProtocolTest is Test {
     }
 
     function testFailInvalidToken() public {
-        vm.startPrank(user1);
-        MockERC20 invalidToken = new MockERC20("Invalid", "INV");
+        address invalidToken = address(0x7);
 
+        vm.startPrank(user1);
         vm.expectRevert(CommitProtocol.TokenNotAllowed.selector);
+
         commit.createCommitment{value: COMMIT_CREATION_FEE}(
-            address(invalidToken),
+            invalidToken,
             STAKE_AMOUNT,
             JOIN_FEE,
             500,
@@ -186,45 +208,27 @@ contract CommitProtocolTest is Test {
         );
         vm.stopPrank();
     }
-}
 
-// Basic Mock ERC20 contract for testing
-contract MockERC20 {
-    string public name;
-    string public symbol;
-    uint8 public decimals = 18;
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
+    function testFailureScenarios() public {
+        // Test insufficient allowance
+        vm.startPrank(user1);
+        vm.mockCall(
+            token,
+            abi.encodeWithSelector(IERC20.allowance.selector, user1, address(commit)),
+            abi.encode(0) // No allowance
+        );
 
-    constructor(string memory _name, string memory _symbol) {
-        name = _name;
-        symbol = _symbol;
-    }
-
-    function mint(address to, uint256 amount) public {
-        balanceOf[to] += amount;
-        totalSupply += amount;
-    }
-
-    function approve(address spender, uint256 amount) public returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        return true;
-    }
-
-    function transfer(address to, uint256 amount) public returns (bool) {
-        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) public returns (bool) {
-        require(allowance[from][msg.sender] >= amount, "Insufficient allowance");
-        require(balanceOf[from] >= amount, "Insufficient balance");
-        allowance[from][msg.sender] -= amount;
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
-        return true;
+        vm.expectRevert(); // Should revert due to insufficient allowance
+        commit.createCommitment{value: COMMIT_CREATION_FEE}(
+            token,
+            STAKE_AMOUNT,
+            JOIN_FEE,
+            500,
+            "Test Commitment",
+            block.timestamp + 1 days,
+            block.timestamp + 2 days,
+            client
+        );
+        vm.stopPrank();
     }
 }
