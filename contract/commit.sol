@@ -43,7 +43,6 @@ contract CommitProtocol is
         uint256 joinFee;          // (Optional) fee to join (distributed between protocol, client, creator)
         uint16 creatorShare;       // (Optional) creator's share of failed stakes
         string description;        // Description of the commitment
-        mapping(address => bool) participantSuccess;  // Tracks who succeeded
         CommitmentStatus status;   // Current state (Active/Resolved/Cancelled)
         uint256 failedCount;      // Number of participants who failed
         uint256 joinDeadline;     // Deadline to join
@@ -63,7 +62,7 @@ contract CommitProtocol is
     uint16 public constant MAX_CREATOR_SHARE = 1000;    // 10% = 1000 bps
     uint256 public constant MAX_DESCRIPTION_LENGTH = 1000;    // Characters
     uint256 public constant MAX_DEADLINE_DURATION = 365 days; // Max time window
-		
+    
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
@@ -72,10 +71,10 @@ contract CommitProtocol is
     address public protocolFeeAddress;
     /// @notice Tracks participants for each commitment 
     mapping(uint256 => EnumerableSet.AddressSet) private commitmentParticipants;
+    mapping(uint256 => EnumerableSet.AddressSet) private commitmentWinners;
     mapping(address => bool) public allowedTokens;
     mapping(address => Client) public clients;
     mapping(uint256 => Commitment) public commitments;
-    mapping(uint256 => mapping(address => bool)) public hasJoined;
     mapping(uint256 => mapping(address => uint256)) public balances;
     mapping(address => mapping(address => uint256)) public accumulatedTokenFees;
 
@@ -137,11 +136,6 @@ contract CommitProtocol is
                                 MODIFIERS
     //////////////////////////////////////////////////////////////*/
 
-    modifier whenNotPaused() {
-        require(!paused, ContractPaused());
-        _;
-    }
-
     modifier commitmentExists(uint256 _id) {
         require(_id < nextCommitmentId, CommitmentNotExists(_id));
         _;
@@ -165,7 +159,7 @@ contract CommitProtocol is
     /// @notice Initializes the contract with the protocol fee address
     /// @param _protocolFeeAddress The address where protocol fees are sent
     function initialize(address _protocolFeeAddress) public initializer {
-        __Ownable_init();
+        __Ownable_init(msg.sender); // Owner is the contract creator
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
         __Pausable_init();
@@ -177,7 +171,7 @@ contract CommitProtocol is
                         COMMITMENT CORE FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-	/// @notice Creates a commitment with specified parameters and stake requirements
+    /// @notice Creates a commitment with specified parameters and stake requirements
     /// @param _tokenAddress The address of the ERC20 token used for staking
     /// @param _stakeAmount The amount each participant must stake
     /// @param _joinFee The fee required to join the commitment
@@ -208,7 +202,7 @@ contract CommitProtocol is
         require(_stakeAmount > 0, InvalidState(CommitmentStatus.Cancelled));
         require(_joinFee >= PROTOCOL_SHARE + clients[_client].feeShare, InvalidState(CommitmentStatus.Cancelled));
 
-		// Transfer creation fee in ETH
+    // Transfer creation fee in ETH
         (bool sent,) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
         require(sent, ETHTransferFailed());
 
@@ -231,8 +225,7 @@ contract CommitProtocol is
         commitment.fulfillmentDeadline = _fulfillmentDeadline;
 
         // Make creator the first participant with their stake amount
-        commitment.participants.push(msg.sender);
-        hasJoined[commitmentId][msg.sender] = true;
+        commitmentParticipants[commitmentId].add(msg.sender);
         balances[commitmentId][msg.sender] = _stakeAmount;
 
         emit CommitmentCreated(
@@ -247,11 +240,11 @@ contract CommitProtocol is
         emit CommitmentJoined(commitmentId, msg.sender);
     }
 
-  	/// @notice Allows joining an active commitment
+    /// @notice Allows joining an active commitment
     /// @param _id The ID of the commitment to join
     function joinCommitment(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) withinJoinPeriod(_id) {
         Commitment storage commitment = commitments[_id];
-        require(!hasJoined[_id][msg.sender], AlreadyJoined());
+        require(!commitmentParticipants[_id].contains(msg.sender), AlreadyJoined());
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
 
         // Calculate total amount needed (stake + join fee)
@@ -279,8 +272,7 @@ contract CommitProtocol is
         );
 
         // Record participant's join status and balance
-        commitment.participants.push(msg.sender);
-        hasJoined[_id][msg.sender] = true;
+        commitmentParticipants[_id].add(msg.sender);
         balances[_id][msg.sender] = commitment.stakeAmount;
 
         emit CommitmentJoined(_id, msg.sender);
@@ -297,32 +289,29 @@ contract CommitProtocol is
         require(block.timestamp >= commitment.fulfillmentDeadline, 
             FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
 
+        EnumerableSet.AddressSet storage participants = commitmentParticipants[_id];
+        EnumerableSet.AddressSet storage winners = commitmentWinners[_id];
+
         // Cache lengths for gas 
         uint256 winnersLength = _winners.length;
-        uint256 participantCount = commitmentParticipants[_id].length();
+        uint256 participantCount = participants.length();
         require(winnersLength > 0 && winnersLength <= participantCount, 
             InvalidState(CommitmentStatus.Resolved));
 
-        mapping(address => bool) memory isWinner;
         for (uint256 i = 0; i < winnersLength; i++) {
             address winner = _winners[i];
-            require(!isWinner[winner], DuplicateWinner(winner));
-            require(commitmentParticipants[_id].contains(winner), InvalidWinner(winner));
-            isWinner[winner] = true;
+            require(!winners.add(winner), DuplicateWinner(winner));
+            require(participants.contains(winner), InvalidWinner(winner));
         }
        
-       // Process participants
-        commitment.failedCount = 0;
-        for (uint256 i = 0; i < participantCount; i++) {
-            address participant = commitmentParticipants[_id].at(i);
-            bool won = isWinner[participant];
-            commitment.participantSuccess[participant] = won;
-            if (!won) commitment.failedCount++;
-        }
+        // Process participants
+        // Use local var to save gas so we dont have to read `commitment.failedCount` every time
+        uint failedCount = participantCount - winnersLength; 
+        commitment.failedCount = failedCount;
 
         // Distribute failed stakes among winners
-        if (commitment.failedCount > 0) {
-            uint256 totalFailedStake = commitment.failedCount * commitment.stakeAmount;
+        if (failedCount > 0) {
+            uint256 totalFailedStake = failedCount * commitment.stakeAmount;
             
             // Calculate fee shares
             uint256 protocolFeeAmount = (totalFailedStake * PROTOCOL_SHARE) / BASIS_POINTS;
@@ -335,10 +324,12 @@ contract CommitProtocol is
             accumulatedTokenFees[commitment.tokenAddress][clients[commitment.client].feeAddress] += clientFeeAmount;
             balances[_id][commitment.creator] += creatorAmount;
 
-            // Distribute remaining amount equally among winners
-            uint256 amountPerWinner = winnerAmount / winnersLength;
-            for (uint256 i = 0; i < winnersLength; i++) {
-                balances[_id][_winners[i]] += amountPerWinner;
+            if (winnersLength > 0) { // Ensure we don't divide by 0
+                // Distribute remaining amount equally among winners
+                uint256 amountPerWinner = winnerAmount / winnersLength;
+                for (uint256 i = 0; i < winnersLength; i++) {
+                    balances[_id][_winners[i]] += amountPerWinner;
+                }
             }
         }
 
@@ -347,7 +338,7 @@ contract CommitProtocol is
         emit CommitmentResolved(_id, _winners);
     }
 
-	/// @notice Allows creator or owner to cancel a commitment before any participants join
+  /// @notice Allows creator or owner to cancel a commitment before any participants join
     /// @param _id The ID of the commitment to cancel
     function cancelCommitment(uint256 _id) external nonReentrant {
         require(_id < nextCommitmentId, CommitmentNotExists(_id));
@@ -355,20 +346,20 @@ contract CommitProtocol is
         Commitment storage commitment = commitments[_id];
         require(msg.sender == commitment.creator || msg.sender == owner(), UnauthorizedAccess(msg.sender));
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
-        require(commitment.participants.length == 0, InvalidState(CommitmentStatus.Cancelled));
+        require(commitmentParticipants[_id].length() == 0, InvalidState(CommitmentStatus.Cancelled));
 
         commitment.status = CommitmentStatus.Cancelled;
         emit CommitmentCancelled(_id);
     }
 
-	/// @notice Claims participant's rewards and stakes after commitment resolution
+    /// @notice Claims participant's rewards and stakes after commitment resolution
     /// @dev Winners can claim their original stake plus their share of rewards from failed stakes
     /// @dev Losers cannot claim anything as their stakes are distributed to winners
     /// @param _id The commitment ID to claim rewards from
     function claimRewards(uint256 _id) external nonReentrant {
         Commitment storage commitment = commitments[_id];
         require(commitment.status == CommitmentStatus.Resolved, InvalidState(commitment.status));
-        require(hasJoined[_id][msg.sender], UnauthorizedAccess(msg.sender));
+        require(commitmentParticipants[_id].contains(msg.sender), UnauthorizedAccess(msg.sender));
 
         uint256 amount = balances[_id][msg.sender];
         require(amount > 0, NoRewardsToClaim());
@@ -423,7 +414,7 @@ contract CommitProtocol is
         emit TokenAllowanceUpdated(token, allowed);
     }
 
-	/// @notice Updates the protocol fee address
+    /// @notice Updates the protocol fee address
     /// @param _newAddress The new address for protocol fees
     function setProtocolFeeAddress(address _newAddress) external onlyOwner {
         require(_newAddress != address(0), InvalidAddress());
@@ -454,7 +445,7 @@ contract CommitProtocol is
     function emergencyResolveCommitment(uint256 _id) external onlyOwner {
         Commitment storage commitment = commitments[_id];
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
-        require(block.timestamp > commitment.fulfillmentDeadline || paused, 
+        require(block.timestamp > commitment.fulfillmentDeadline || paused(), 
             FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
 
         commitment.status = CommitmentStatus.EmergencyResolved;
@@ -469,6 +460,16 @@ contract CommitProtocol is
         
         commitment.status = CommitmentStatus.Cancelled;
         emit CommitmentEmergencyPaused(_id);
+    }
+
+    /// @notice Emergency function to pause any function that uses `whenNotPaused`
+    function emergencyPauseAll() external onlyOwner {
+        _pause();
+    }
+
+    /// @notice Emergency function to unpause all functions blocked on `whenNotPaused`
+    function emergencyUnpauseAll() external onlyOwner {
+        _unpause();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -504,6 +505,14 @@ contract CommitProtocol is
             c.status,
             c.joinDeadline > block.timestamp ? c.joinDeadline - block.timestamp : 0
         );
+    }
+
+    function getCommitmentParticipants(uint256 _id) external view returns (address[] memory) {
+        return commitmentParticipants[_id].values();
+    }
+
+    function getCommitmentWinners(uint256 _id) external view returns (address[] memory) {
+        return commitmentWinners[_id].values();
     }
 
     /*//////////////////////////////////////////////////////////////
