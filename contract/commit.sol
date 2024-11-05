@@ -3,6 +3,7 @@ pragma solidity ^0.8.21;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -18,6 +19,7 @@ contract CommitProtocol is
     PausableUpgradeable 
 {
     using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     /*//////////////////////////////////////////////////////////////
                                 STRUCTS
@@ -30,21 +32,22 @@ contract CommitProtocol is
         bool isActive;         // Whether users can create commitments through this client
     }
 
+    /// @notice Represents a single commitment with its rules and state
+    /// @dev Uses EnumerableSet for participant management and mapping for success tracking
     struct Commitment {
-        uint256 id;
-        address creator;
-        address client;
-        address tokenAddress;
-        uint256 stakeAmount;
-        uint256 joinFee;
-        uint16 creatorShare;
-        string description;
-        address[] participants;
-        mapping(address => bool) participantSuccess;
-        CommitmentStatus status;
-        uint256 failedCount;
-        uint256 joinDeadline;
-        uint256 fulfillmentDeadline;
+        uint256 id;                // Unique identifier
+        address creator;           // Address that created the commitment
+        address client;            // Platform/client through which commitment was created
+        address tokenAddress;      // Token used for staking
+        uint256 stakeAmount;      // Amount each participant must stake
+        uint256 joinFee;          // (Optional) fee to join (distributed between protocol, client, creator)
+        uint16 creatorShare;       // (Optional) creator's share of failed stakes
+        string description;        // Description of the commitment
+        mapping(address => bool) participantSuccess;  // Tracks who succeeded
+        CommitmentStatus status;   // Current state (Active/Resolved/Cancelled)
+        uint256 failedCount;      // Number of participants who failed
+        uint256 joinDeadline;     // Deadline to join
+        uint256 fulfillmentDeadline;  // Deadline to fulfill commitment
     }
 
     enum CommitmentStatus { Active, Resolved, Cancelled }
@@ -67,6 +70,8 @@ contract CommitProtocol is
 
     uint256 public nextCommitmentId;
     address public protocolFeeAddress;
+    /// @notice Tracks participants for each commitment 
+    mapping(uint256 => EnumerableSet.AddressSet) private commitmentParticipants;
     mapping(address => bool) public allowedTokens;
     mapping(address => Client) public clients;
     mapping(uint256 => Commitment) public commitments;
@@ -126,6 +131,7 @@ contract CommitProtocol is
     error ContractPaused();
     error JoiningPeriodEnded(uint256 currentTime, uint256 deadline);
     error DirectDepositsNotAllowed();
+    error DuplicateWinner(address winner);
 
     /*//////////////////////////////////////////////////////////////
                                 MODIFIERS
@@ -283,29 +289,35 @@ contract CommitProtocol is
     /// @notice Resolves commitment and distributes rewards to winners
     /// @param _id The ID of the commitment to resolve
     /// @param _winners The addresses of the participants who succeeded
+    /// @dev Only creator can resolve, must be after fulfillment deadline
     function resolveCommitment(uint256 _id, address[] calldata _winners) external nonReentrant whenNotPaused {
         Commitment storage commitment = commitments[_id];
         require(msg.sender == commitment.creator, UnauthorizedAccess(msg.sender));
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
-        require(block.timestamp >= commitment.fulfillmentDeadline, FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
-        require(_winners.length > 0, InvalidState(CommitmentStatus.Resolved));
-        require(_winners.length <= commitment.participants.length, InvalidState(CommitmentStatus.Resolved));
+        require(block.timestamp >= commitment.fulfillmentDeadline, 
+            FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
 
-        for (uint256 i = 0; i < commitment.participants.length; i++) {
-            address participant = commitment.participants[i];
-            bool isWinner = false;
-            for (uint256 j = 0; j < _winners.length; j++) {
-                if (participant == _winners[j]) {
-                    isWinner = true;
-                    break;
-                }
-            }
+        // Cache lengths for gas 
+        uint256 winnersLength = _winners.length;
+        uint256 participantCount = commitmentParticipants[_id].length();
+        require(winnersLength > 0 && winnersLength <= participantCount, 
+            InvalidState(CommitmentStatus.Resolved));
 
-            // Mark participant success and count failures
-            commitment.participantSuccess[participant] = isWinner;
-            if (!isWinner) {
-                commitment.failedCount++;
-            }
+        mapping(address => bool) memory isWinner;
+        for (uint256 i = 0; i < winnersLength; i++) {
+            address winner = _winners[i];
+            require(!isWinner[winner], DuplicateWinner(winner));
+            require(commitmentParticipants[_id].contains(winner), InvalidWinner(winner));
+            isWinner[winner] = true;
+        }
+       
+       // Process participants
+        commitment.failedCount = 0;
+        for (uint256 i = 0; i < participantCount; i++) {
+            address participant = commitmentParticipants[_id].at(i);
+            bool won = isWinner[participant];
+            commitment.participantSuccess[participant] = won;
+            if (!won) commitment.failedCount++;
         }
 
         // Distribute failed stakes among winners
@@ -324,8 +336,8 @@ contract CommitProtocol is
             balances[_id][commitment.creator] += creatorAmount;
 
             // Distribute remaining amount equally among winners
-            uint256 amountPerWinner = winnerAmount / _winners.length;
-            for (uint256 i = 0; i < _winners.length; i++) {
+            uint256 amountPerWinner = winnerAmount / winnersLength;
+            for (uint256 i = 0; i < winnersLength; i++) {
                 balances[_id][_winners[i]] += amountPerWinner;
             }
         }
@@ -474,6 +486,15 @@ contract CommitProtocol is
                             VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
+    /// @notice Retrieves detailed information about a commitment
+    /// @param _id The commitment ID to query
+    /// @return creator Address of commitment creator
+    /// @return client Address of client platform
+    /// @return stakeAmount Required stake amount
+    /// @return joinFee Fee to join commitment
+    /// @return participantCount Number of current participants
+    /// @return status Current commitment status
+    /// @return timeRemaining Time left to join (0 if ended)
     function getCommitmentDetails(uint256 _id) external view returns (
         address creator,
         address client,
@@ -484,12 +505,13 @@ contract CommitProtocol is
         uint256 timeRemaining
     ) {
         Commitment storage c = commitments[_id];
+        uint256 count = commitmentParticipants[_id].length();
         return (
             c.creator,
             c.client,
             c.stakeAmount,
             c.joinFee,
-            c.participants.length,
+            count,
             c.status,
             c.joinDeadline > block.timestamp ? c.joinDeadline - block.timestamp : 0
         );
