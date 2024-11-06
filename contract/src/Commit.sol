@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
-//TODO: added basic test file
-
-// TODO: Added @openzeppelin packages to NPM
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -44,11 +41,10 @@ PausableUpgradeable
         address tokenAddress;      // Token used for staking
         uint256 stakeAmount;      // Amount each participant must stake
         uint256 joinFee;          // (Optional) fee to join (distributed between protocol, client, creator)
-        //TODO: why is this uint16 and not uint8? like Client.feeShare?
-        uint16 creatorShare;       // (Optional) creator's share of failed stakes
+        uint8 creatorShare;       // (Optional) creator's share of failed stakes
         //TODO: consider using Poster.sol or IPFS for string data, storing the string on chain is unnecessary and expensive
         string description;        // Description of the commitment
-        CommitmentStatus status;   // Current state (Active/Resolved/Cancelled)
+        CommitmentStatus status;   // Current state (Active/Resolved/Cancelled/EmergencyResolved)
         uint256 failedCount;      // Number of participants who failed
         uint256 joinDeadline;     // Deadline to join
         uint256 fulfillmentDeadline;  // Deadline to fulfill commitment
@@ -82,8 +78,6 @@ PausableUpgradeable
     mapping(address => bool) public allowedTokens;
     mapping(address => Client) public clients;
     mapping(uint256 => Commitment) public commitments;
-    // TODO: isn't this mapping redundant with commitmentParticipants?
-    mapping(uint256 => mapping(address => bool)) public hasJoined;
     mapping(uint256 => mapping(address => uint256)) public balances;
     mapping(address => mapping(address => uint256)) public accumulatedTokenFees;
 
@@ -145,25 +139,13 @@ PausableUpgradeable
                                 MODIFIERS
     //////////////////////////////////////////////////////////////*/
 
-    // TOD: I think this modifier is not needed, as it's already in the PausableUpgradeable contract
-//    modifier whenNotPaused() {
-//        require(!paused, ContractPaused());
-//        _;
-//    }
-
     modifier commitmentExists(uint256 _id) {
-        // TODO: use custom errors for consistency and gas savings
-        if (_id >= nextCommitmentId) {
-            revert CommitmentNotExists(_id);
-        }
+        require(_id < nextCommitmentId, CommitmentNotExists(_id));
         _;
     }
 
     modifier withinJoinPeriod(uint256 _id) {
-        // TODO: use custom errors for consistency and gas savings
-        if (block.timestamp > commitments[_id].joinDeadline) {
-            revert JoiningPeriodEnded(block.timestamp, commitments[_id].joinDeadline);
-        }
+        require(block.timestamp < commitments[_id].joinDeadline, JoiningPeriodEnded(block.timestamp, commitments[_id].joinDeadline));
         _;
     }
 
@@ -179,16 +161,11 @@ PausableUpgradeable
     /// @notice Initializes the contract with the protocol fee address
     /// @param _protocolFeeAddress The address where protocol fees are sent
     function initialize(address _protocolFeeAddress) public initializer {
-        // TODO: added missing parameter
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
         __Pausable_init();
-        // TODO: use negation for custom errors https://soliditylang.org/blog/2021/04/21/custom-errors/
-        if(_protocolFeeAddress == address(0)) {
-            revert InvalidAddress();
-        }
-//        require(_protocolFeeAddress != address(0), InvalidAddress());
+        require(_protocolFeeAddress != address(0), InvalidAddress());
         protocolFeeAddress = _protocolFeeAddress;
     }
 
@@ -210,16 +187,13 @@ PausableUpgradeable
         address _tokenAddress,
         uint256 _stakeAmount,
         uint256 _joinFee,
-        uint16 _creatorShare,
+        uint8 _creatorShare,
         string calldata _description,
         uint256 _joinDeadline,
         uint256 _fulfillmentDeadline,
         address _client
     ) external payable nonReentrant whenNotPaused {
-
-        // TODO: this is a big 'if' with multiple checks leading to the same error. Maybe split it up, create a modifier, or use internal functions
-        // TODO: see other comments on custom errors and using negation
-
+        
         require(msg.value == COMMIT_CREATION_FEE, InvalidCreationFee(msg.value, COMMIT_CREATION_FEE));
         require(allowedTokens[_tokenAddress], TokenNotAllowed(_tokenAddress));
         require(clients[_client].isActive, InvalidState(CommitmentStatus.Cancelled));
@@ -233,11 +207,7 @@ PausableUpgradeable
 
         // Transfer creation fee in ETH
         (bool sent,) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
-        // TODO: use custom errors for consistency and gas savings
-        if (!sent) {
-            revert ETHTransferFailed();
-        }
-//        require(sent, ETHTransferFailed());
+        require(sent, ETHTransferFailed());
 
         // Transfer only stake amount for creator (no join fee)
         IERC20(_tokenAddress).safeTransferFrom(msg.sender, address(this), _stakeAmount);
@@ -277,9 +247,8 @@ PausableUpgradeable
     /// @notice Allows joining an active commitment
     /// @param _id The ID of the commitment to join
     function joinCommitment(uint256 _id) external nonReentrant whenNotPaused commitmentExists(_id) withinJoinPeriod(_id) {
-        // TODO: load this after the next check, if it reverts you can skip the load.
-        Commitment storage commitment = commitments[_id];
         require(!commitmentParticipants[_id].contains(msg.sender), AlreadyJoined());
+        Commitment storage commitment = commitments[_id];
         require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
 
         // Calculate total amount needed (stake + join fee)
@@ -320,16 +289,9 @@ PausableUpgradeable
     // TODO: consider CHECKS-EFFECTS-INTERACTIONS pattern https://fravoll.github.io/solidity-patterns/checks_effects_interactions.html
     function resolveCommitment(uint256 _id, address[] calldata _winners) external nonReentrant whenNotPaused {
         Commitment storage commitment = commitments[_id];
-        // TODO: use custom errors for consistency and gas savings
-        if (msg.sender != commitment.creator) {
-            revert UnauthorizedAccess(msg.sender);
-        }
-        if (commitment.status != CommitmentStatus.Active) {
-            revert InvalidState(commitment.status);
-        }
-        if (block.timestamp < commitment.fulfillmentDeadline) {
-            revert FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline);
-        }
+        require(msg.sender == commitment.creator, UnauthorizedAccess(msg.sender));
+        require(commitment.status == CommitmentStatus.Active, InvalidState(commitment.status));
+        require(block.timestamp < commitment.fulfillmentDeadline, FulfillmentPeriodNotEnded(block.timestamp, commitment.fulfillmentDeadline));
 
         EnumerableSet.AddressSet storage participants = commitmentParticipants[_id];
         EnumerableSet.AddressSet storage winners = commitmentWinners[_id];
@@ -563,7 +525,7 @@ PausableUpgradeable
         require(addr != address(0), InvalidAddress());
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
+    function _authorizeUpgrade(address newImplementation) internal view override onlyOwner {
         require(newImplementation != address(0), InvalidAddress());
     }
 
