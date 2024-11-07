@@ -6,11 +6,11 @@ schema:
 dataSources:
   - kind: ethereum
     name: CommitProtocol
-    network: base-sepolia
+    network: sepolia
     source:
-      address: "0xB565656a18bd287A28C6aBEBBcbBDB54DDe37eeb"
+      address: "0x2eeBC3E75FBAbA1f552be9758204C7DE33c91730"
       abi: CommitProtocol
-      startBlock: 17579021
+      startBlock: 7032008
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -40,7 +40,7 @@ dataSources:
       eventHandlers:
         - event: ClientDeactivated(indexed address)
           handler: handleClientDeactivated
-        - event: ClientRegistered(indexed address,address,uint8)
+        - event: ClientRegistered(indexed address,address,uint16)
           handler: handleClientRegistered
         - event: CommitmentCancelled(indexed uint256)
           handler: handleCommitmentCancelled

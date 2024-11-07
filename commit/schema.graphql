@@ -10,7 +10,7 @@ type ClientRegistered @entity(immutable: true) {
   id: Bytes!
   clientAddress: Bytes! # address
   feeAddress: Bytes! # address
-  feeShare: Int! # uint8
+  feeShare: Int! # uint16
   blockNumber: BigInt!
   blockTimestamp: BigInt!
   transactionHash: Bytes!

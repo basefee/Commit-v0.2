@@ -176,9 +176,9 @@
       },
       {
         "indexed": false,
-        "internalType": "uint8",
+        "internalType": "uint16",
         "name": "feeShare",
-        "type": "uint8"
+        "type": "uint16"
       }
     ],
     "name": "ClientRegistered",
@@ -605,7 +605,7 @@
     "name": "clients",
     "outputs": [
       { "internalType": "address", "name": "feeAddress", "type": "address" },
-      { "internalType": "uint8", "name": "feeShare", "type": "uint8" },
+      { "internalType": "uint16", "name": "feeShare", "type": "uint16" },
       { "internalType": "bool", "name": "isActive", "type": "bool" }
     ],
     "stateMutability": "view",
@@ -621,7 +621,7 @@
       { "internalType": "address", "name": "tokenAddress", "type": "address" },
       { "internalType": "uint256", "name": "stakeAmount", "type": "uint256" },
       { "internalType": "uint256", "name": "joinFee", "type": "uint256" },
-      { "internalType": "uint8", "name": "creatorShare", "type": "uint8" },
+      { "internalType": "uint16", "name": "creatorShare", "type": "uint16" },
       { "internalType": "string", "name": "description", "type": "string" },
       {
         "internalType": "enum CommitProtocol.CommitmentStatus",
@@ -644,7 +644,7 @@
       { "internalType": "address", "name": "_tokenAddress", "type": "address" },
       { "internalType": "uint256", "name": "_stakeAmount", "type": "uint256" },
       { "internalType": "uint256", "name": "_joinFee", "type": "uint256" },
-      { "internalType": "uint8", "name": "_creatorShare", "type": "uint8" },
+      { "internalType": "uint16", "name": "_creatorShare", "type": "uint16" },
       { "internalType": "string", "name": "_description", "type": "string" },
       { "internalType": "uint256", "name": "_joinDeadline", "type": "uint256" },
       {
@@ -805,7 +805,7 @@
   {
     "inputs": [
       { "internalType": "address", "name": "_feeAddress", "type": "address" },
-      { "internalType": "uint8", "name": "_feeShare", "type": "uint8" }
+      { "internalType": "uint16", "name": "_feeShare", "type": "uint16" }
     ],
     "name": "registerClient",
     "outputs": [],
