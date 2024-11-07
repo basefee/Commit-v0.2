@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.21;
+pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -28,7 +28,7 @@ PausableUpgradeable
     /// @notice Client represents an integrated application or platform using the Commit Protocol
     struct Client {
         address feeAddress;    // Address where client's fee share is sent
-        uint8 feeShare;        // Percentage of fees client receives (0-9%)
+        uint16 feeShare;        // Percentage of fees client receives (0-9%)
         bool isActive;         // Whether users can create commitments through this client
     }
 
@@ -41,7 +41,7 @@ PausableUpgradeable
         address tokenAddress;      // Token used for staking
         uint256 stakeAmount;      // Amount each participant must stake
         uint256 joinFee;          // (Optional) fee to join (distributed between protocol, client, creator)
-        uint8 creatorShare;       // (Optional) creator's share of failed stakes
+        uint16 creatorShare;       // (Optional) creator's share of failed stakes
         //TODO: consider using Poster.sol or IPFS for string data, storing the string on chain is unnecessary and expensive
         string description;        // Description of the commitment
         CommitmentStatus status;   // Current state (Active/Resolved/Cancelled/EmergencyResolved)
@@ -85,7 +85,7 @@ PausableUpgradeable
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
 
-    event ClientRegistered(address indexed clientAddress, address feeAddress, uint8 feeShare);
+    event ClientRegistered(address indexed clientAddress, address feeAddress, uint16 feeShare);
     event TokenAllowanceUpdated(address indexed token, bool allowed);
     event CommitmentCreated(
         uint256 indexed id,
@@ -187,7 +187,7 @@ PausableUpgradeable
         address _tokenAddress,
         uint256 _stakeAmount,
         uint256 _joinFee,
-        uint8 _creatorShare,
+        uint16 _creatorShare,
         string calldata _description,
         uint256 _joinDeadline,
         uint256 _fulfillmentDeadline,
@@ -196,14 +196,17 @@ PausableUpgradeable
         
         require(msg.value == COMMIT_CREATION_FEE, InvalidCreationFee(msg.value, COMMIT_CREATION_FEE));
         require(allowedTokens[_tokenAddress], TokenNotAllowed(_tokenAddress));
-        require(clients[_client].isActive, InvalidState(CommitmentStatus.Cancelled));
-        require(_creatorShare <= MAX_CREATOR_SHARE, InvalidState(CommitmentStatus.Cancelled));
-        require(_joinDeadline > block.timestamp, InvalidState(CommitmentStatus.Cancelled));
-        require(_fulfillmentDeadline > _joinDeadline, InvalidState(CommitmentStatus.Cancelled));
-        require(_fulfillmentDeadline <= block.timestamp + MAX_DEADLINE_DURATION, InvalidState(CommitmentStatus.Cancelled));
-        require(bytes(_description).length <= MAX_DESCRIPTION_LENGTH, InvalidState(CommitmentStatus.Cancelled));
-        require(_stakeAmount > 0, InvalidState(CommitmentStatus.Cancelled));
-        require(_joinFee >= PROTOCOL_SHARE + clients[_client].feeShare, InvalidState(CommitmentStatus.Cancelled));
+        require(clients[_client].isActive, "Client not active");
+        require(_creatorShare <= MAX_CREATOR_SHARE, "creator share");
+        require(_joinDeadline > block.timestamp, "join deadline");
+        require(_fulfillmentDeadline > _joinDeadline, "fulfil");
+        require(_fulfillmentDeadline <= block.timestamp + MAX_DEADLINE_DURATION, "fulfil deadline");
+        require(bytes(_description).length <= MAX_DESCRIPTION_LENGTH, "desc");
+        require(_stakeAmount > 0, "stake");
+        uint256 totalFeeBps = PROTOCOL_SHARE + clients[_client].feeShare;
+        uint256 minJoinFee = (_stakeAmount * totalFeeBps) / BASIS_POINTS;
+        require(_joinFee >= minJoinFee, "join fee");
+
 
         // Transfer creation fee in ETH
         (bool sent,) = protocolFeeAddress.call{value: COMMIT_CREATION_FEE}("");
@@ -383,7 +386,7 @@ PausableUpgradeable
     /// @notice Registers a new client with a fee address and share
     /// @param _feeAddress The address where client fees are sent
     /// @param _feeShare The percentage of fees the client receives
-    function registerClient(address _feeAddress, uint8 _feeShare) external whenNotPaused {
+    function registerClient(address _feeAddress, uint16 _feeShare) external whenNotPaused {
         require(_feeAddress != address(0), InvalidAddress());
         require(_feeShare <= MAX_CLIENT_FEE, InvalidState(CommitmentStatus.Cancelled));
         require(!clients[msg.sender].isActive, InvalidState(CommitmentStatus.Cancelled));

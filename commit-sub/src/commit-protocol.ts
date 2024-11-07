@@ -39,6 +39,8 @@ import {
   Upgraded
 } from "../generated/schema"
 
+import { Bytes } from "@graphprotocol/graph-ts"
+
 export function handleClientDeactivated(event: ClientDeactivatedEvent): void {
   let entity = new ClientDeactivated(
     event.transaction.hash.concatI32(event.logIndex.toI32())
@@ -150,7 +152,7 @@ export function handleCommitmentResolved(event: CommitmentResolvedEvent): void {
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
   entity.CommitProtocol_id = event.params.id
-  entity.winners = event.params.winners
+  entity.winners = changetype<Bytes[]>(event.params.winners)
 
   entity.blockNumber = event.block.number
   entity.blockTimestamp = event.block.timestamp
