@@ -6,22 +6,22 @@ import {
   beforeAll,
   afterAll
 } from "matchstick-as/assembly/index"
-import { Address } from "@graphprotocol/graph-ts"
-import { Upgraded } from "../generated/schema"
-import { Upgraded as UpgradedEvent } from "../generated/ERC1967Proxy/ERC1967Proxy"
-import { handleUpgraded } from "../src/erc-1967-proxy"
-import { createUpgradedEvent } from "./erc-1967-proxy-utils"
+import { Address, BigInt } from "@graphprotocol/graph-ts"
+import { ClientDeactivated } from "../generated/schema"
+import { ClientDeactivated as ClientDeactivatedEvent } from "../generated/CommitProtocol/CommitProtocol"
+import { handleClientDeactivated } from "../src/commit-protocol"
+import { createClientDeactivatedEvent } from "./commit-protocol-utils"
 
 // Tests structure (matchstick-as >=0.5.0)
 // https://thegraph.com/docs/en/developer/matchstick/#tests-structure-0-5-0
 
 describe("Describe entity assertions", () => {
   beforeAll(() => {
-    let implementation = Address.fromString(
+    let clientAddress = Address.fromString(
       "0x0000000000000000000000000000000000000001"
     )
-    let newUpgradedEvent = createUpgradedEvent(implementation)
-    handleUpgraded(newUpgradedEvent)
+    let newClientDeactivatedEvent = createClientDeactivatedEvent(clientAddress)
+    handleClientDeactivated(newClientDeactivatedEvent)
   })
 
   afterAll(() => {
@@ -31,14 +31,14 @@ describe("Describe entity assertions", () => {
   // For more test scenarios, see:
   // https://thegraph.com/docs/en/developer/matchstick/#write-a-unit-test
 
-  test("Upgraded created and stored", () => {
-    assert.entityCount("Upgraded", 1)
+  test("ClientDeactivated created and stored", () => {
+    assert.entityCount("ClientDeactivated", 1)
 
     // 0xa16081f360e3847006db660bae1c6d1b2e17ec2a is the default address used in newMockEvent() function
     assert.fieldEquals(
-      "Upgraded",
+      "ClientDeactivated",
       "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1",
-      "implementation",
+      "clientAddress",
       "0x0000000000000000000000000000000000000001"
     )
 

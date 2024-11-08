@@ -1,3 +1,159 @@
+type ClientDeactivated @entity(immutable: true) {
+  id: Bytes!
+  clientAddress: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type ClientRegistered @entity(immutable: true) {
+  id: Bytes!
+  clientAddress: Bytes! # address
+  feeAddress: Bytes! # address
+  feeShare: Int! # uint16
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CommitmentCancelled @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CommitmentCreated @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  creator: Bytes! # address
+  client: Bytes! # address
+  tokenAddress: Bytes! # address
+  stakeAmount: BigInt! # uint256
+  joinFee: BigInt! # uint256
+  creatorShare: Int! # uint16
+  description: String! # string
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CommitmentEmergencyPaused @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CommitmentEmergencyResolved @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CommitmentJoined @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  participant: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CommitmentResolved @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  winners: [Bytes!]! # address[]
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type EmergencyWithdrawal @entity(immutable: true) {
+  id: Bytes!
+  token: Bytes! # address
+  amount: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type FeesClaimed @entity(immutable: true) {
+  id: Bytes!
+  recipient: Bytes! # address
+  token: Bytes! # address
+  amount: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type Initialized @entity(immutable: true) {
+  id: Bytes!
+  version: BigInt! # uint64
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type OwnershipTransferred @entity(immutable: true) {
+  id: Bytes!
+  previousOwner: Bytes! # address
+  newOwner: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type Paused @entity(immutable: true) {
+  id: Bytes!
+  account: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type ProtocolFeeAddressUpdated @entity(immutable: true) {
+  id: Bytes!
+  oldAddress: Bytes! # address
+  newAddress: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type RewardsClaimed @entity(immutable: true) {
+  id: Bytes!
+  CommitProtocol_id: BigInt! # uint256
+  user: Bytes! # address
+  token: Bytes! # address
+  amount: BigInt! # uint256
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type TokenAllowanceUpdated @entity(immutable: true) {
+  id: Bytes!
+  token: Bytes! # address
+  allowed: Boolean! # bool
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type Unpaused @entity(immutable: true) {
+  id: Bytes!
+  account: Bytes! # address
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
 type Upgraded @entity(immutable: true) {
   id: Bytes!
   implementation: Bytes! # address
