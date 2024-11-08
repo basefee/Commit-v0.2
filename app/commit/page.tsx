@@ -1,42 +1,65 @@
 "use client";
 
 import { useState } from "react";
-import CommitCard from '../../components/CommitCard';
+import { useQuery } from "@tanstack/react-query";
+import CommitCard from "../../components/CommitCard";
 import { useAccount } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { GraphQLClient, gql } from "graphql-request";
 
-const activeCommits = [
-  {
-    oneLiner: 'Support public goods by donating to 3 projects.',
-    participants: ['0x123', '0x456', '0x789'],
-    stakeAmount: '15 USDC',
-    deadline: '5d left',
-    id: 1,
-  },
-  {
-    oneLiner: 'Complete 5km run every day for a week.',
-    participants: ['0xabc', '0xdef'],
-    stakeAmount: '10 USDC',
-    deadline: '2d left',
-    id: 2,
-  },
-];
+interface Commit {
+  id: string;
+  oneLiner: string;
+  participants: string[];
+  stakeAmount: string;
+  deadline: string;
+}
+
+const graphqlClient = new GraphQLClient("https://api.studio.thegraph.com/query/93948/commit/version/latest");
+
+const GET_ACTIVE_COMMITS = gql`
+  query GetActiveCommits {
+  commitmentCreateds(first: 10) {
+    id
+    CommitProtocol_id
+    creator
+    client
+    tokenAddress
+    stakeAmount
+    joinFee
+    creatorShare
+    blockNumber
+    blockTimestamp
+    transactionHash
+  }
+  }
+`;
 
 export default function CommitPage() {
   const { isConnected } = useAccount();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  // Fetch active commits using TanStack React Query, with type annotation
+  const { data, isLoading, error } = useQuery<{ commitmentCreateds: Commit[] }>({
+    queryKey: ["activeCommits"],
+    queryFn: async () => {
+      const response = await graphqlClient.request<{ commitmentCreateds: Commit[] }>(GET_ACTIVE_COMMITS);
+      return response;
+    },
+  });
 
   const handleProfile = () => {
     setDropdownOpen(false);
     window.location.href = "/profile";
   };
 
+  if (isLoading) return <p>Loading...</p>;
+  if (error) return <p>Error loading commits</p>;
+
   return (
     <div className="flex flex-col space-y-8 p-6">
-      {/* Top navigation */}
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-semibold">Active Commits</h2>
-        
         <div className="relative">
           <ConnectButton.Custom>
             {({ account, chain, openAccountModal, openConnectModal }) => {
@@ -56,14 +79,8 @@ export default function CommitPage() {
                     className="rounded-full bg-gray-800 p-2"
                     onClick={() => setDropdownOpen(!dropdownOpen)}
                   >
-                    <img
-                      src="/profile.svg"
-                      alt="Profile"
-                      width={30}
-                      height={30}
-                    />
+                    <img src="/profile.svg" alt="Profile" width={30} height={30} />
                   </button>
-                  
                   {dropdownOpen && (
                     <div className="absolute right-0 mt-2 w-48 bg-gray-500 rounded-lg shadow-lg">
                       <button
@@ -75,7 +92,7 @@ export default function CommitPage() {
                       <button
                         onClick={() => {
                           setDropdownOpen(false);
-                          openAccountModal(); // Open the disconnect modal
+                          openAccountModal();
                         }}
                         className="block w-full text-left px-4 py-2 hover:text-green-500"
                       >
@@ -90,16 +107,15 @@ export default function CommitPage() {
         </div>
       </div>
 
-      {/* Commit cards */}
       <div className="space-y-4">
-        {activeCommits.map((commit) => (
+        {data?.commitmentCreateds.map((commit) => (
           <CommitCard
             key={commit.id}
             oneLiner={commit.oneLiner}
-            participants={commit.participants.length}
+            participants={10}
             stakeAmount={commit.stakeAmount}
             deadline={commit.deadline}
-            id={commit.id}
+            id={parseInt(commit.id, 10)}
           />
         ))}
       </div>

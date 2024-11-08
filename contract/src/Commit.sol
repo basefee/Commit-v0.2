@@ -94,7 +94,8 @@ PausableUpgradeable
         address tokenAddress,
         uint256 stakeAmount,
         uint256 joinFee,
-        uint16 creatorShare
+        uint16 creatorShare,
+        string description
     );
     event CommitmentJoined(uint256 indexed id, address indexed participant);
     event CommitmentResolved(uint256 indexed id, address[] winners);
@@ -242,7 +243,8 @@ PausableUpgradeable
             _tokenAddress,
             _stakeAmount,
             _joinFee,
-            _creatorShare
+            _creatorShare,
+            _description
         );
         emit CommitmentJoined(commitmentId, msg.sender);
     }
@@ -488,6 +490,7 @@ PausableUpgradeable
     /// @return stakeAmount Required stake amount
     /// @return joinFee Fee to join commitment
     /// @return participantCount Number of current participants
+    /// @return description Description of the commitment 
     /// @return status Current commitment status
     /// @return timeRemaining Time left to join (0 if ended)
     function getCommitmentDetails(uint256 _id) external view returns (
@@ -496,6 +499,7 @@ PausableUpgradeable
         uint256 stakeAmount,
         uint256 joinFee,
         uint256 participantCount,
+        string memory description,
         CommitmentStatus status,
         uint256 timeRemaining
     ) {
@@ -507,6 +511,7 @@ PausableUpgradeable
             c.stakeAmount,
             c.joinFee,
             count,
+            c.description,
             c.status,
             c.joinDeadline > block.timestamp ? c.joinDeadline - block.timestamp : 0
         );

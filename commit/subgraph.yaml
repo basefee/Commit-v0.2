@@ -5,73 +5,22 @@ schema:
   file: ./schema.graphql
 dataSources:
   - kind: ethereum
-    name: CommitProtocol
+    name: ERC1967Proxy
     network: sepolia
     source:
-      address: "0x2eeBC3E75FBAbA1f552be9758204C7DE33c91730"
-      abi: CommitProtocol
-      startBlock: 7032008
+      address: "0x15ef602D45B42c63402af795bD2A96742ee936a7"
+      abi: ERC1967Proxy
+      startBlock: 7037982
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
       language: wasm/assemblyscript
       entities:
-        - ClientDeactivated
-        - ClientRegistered
-        - CommitmentCancelled
-        - CommitmentCreated
-        - CommitmentEmergencyPaused
-        - CommitmentEmergencyResolved
-        - CommitmentJoined
-        - CommitmentResolved
-        - EmergencyWithdrawal
-        - FeesClaimed
-        - Initialized
-        - OwnershipTransferred
-        - Paused
-        - ProtocolFeeAddressUpdated
-        - RewardsClaimed
-        - TokenAllowanceUpdated
-        - Unpaused
         - Upgraded
       abis:
-        - name: CommitProtocol
-          file: ./abis/CommitProtocol.json
+        - name: ERC1967Proxy
+          file: ./abis/ERC1967Proxy.json
       eventHandlers:
-        - event: ClientDeactivated(indexed address)
-          handler: handleClientDeactivated
-        - event: ClientRegistered(indexed address,address,uint16)
-          handler: handleClientRegistered
-        - event: CommitmentCancelled(indexed uint256)
-          handler: handleCommitmentCancelled
-        - event: CommitmentCreated(indexed uint256,indexed address,indexed address,address,uint256,uint256,uint16)
-          handler: handleCommitmentCreated
-        - event: CommitmentEmergencyPaused(indexed uint256)
-          handler: handleCommitmentEmergencyPaused
-        - event: CommitmentEmergencyResolved(indexed uint256)
-          handler: handleCommitmentEmergencyResolved
-        - event: CommitmentJoined(indexed uint256,indexed address)
-          handler: handleCommitmentJoined
-        - event: CommitmentResolved(indexed uint256,address[])
-          handler: handleCommitmentResolved
-        - event: EmergencyWithdrawal(address,uint256)
-          handler: handleEmergencyWithdrawal
-        - event: FeesClaimed(indexed address,indexed address,uint256)
-          handler: handleFeesClaimed
-        - event: Initialized(uint64)
-          handler: handleInitialized
-        - event: OwnershipTransferred(indexed address,indexed address)
-          handler: handleOwnershipTransferred
-        - event: Paused(address)
-          handler: handlePaused
-        - event: ProtocolFeeAddressUpdated(address,address)
-          handler: handleProtocolFeeAddressUpdated
-        - event: RewardsClaimed(indexed uint256,indexed address,indexed address,uint256)
-          handler: handleRewardsClaimed
-        - event: TokenAllowanceUpdated(indexed address,bool)
-          handler: handleTokenAllowanceUpdated
-        - event: Unpaused(address)
-          handler: handleUnpaused
         - event: Upgraded(indexed address)
           handler: handleUpgraded
-      file: ./src/commit-protocol.ts
+      file: ./src/erc-1967-proxy.ts

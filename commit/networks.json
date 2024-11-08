@@ -1,8 +1,8 @@
 {
   "sepolia": {
-    "CommitProtocol": {
-      "address": "0x2eeBC3E75FBAbA1f552be9758204C7DE33c91730",
-      "startBlock": 7032008
+    "ERC1967Proxy": {
+      "address": "0x15ef602D45B42c63402af795bD2A96742ee936a7",
+      "startBlock": 7037982
     }
   }
 }
