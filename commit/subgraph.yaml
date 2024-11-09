@@ -8,9 +8,9 @@ dataSources:
     name: CommitProtocol
     network: sepolia
     source:
-      address: "0x2A1b5ef25Ca529D325ABF46D127cD0FC23a64E42"
+      address: "0x15ef602D45B42c63402af795bD2A96742ee936a7"
       abi: CommitProtocol
-      startBlock: 7037979
+      startBlock: 7037982
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7

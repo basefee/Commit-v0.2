@@ -1,60 +1,118 @@
-"use client";
+'use client'
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import CommitCard from "../../components/CommitCard";
-import { useAccount } from "wagmi";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { GraphQLClient, gql } from "graphql-request";
+import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import CommitCard from "../../components/CommitCard"
+import { useAccount, useReadContracts } from "wagmi"
+import { ConnectButton } from "@rainbow-me/rainbowkit"
+import { GraphQLClient, gql } from "graphql-request"
+import { Loader2 } from "lucide-react"
+import { useRouter } from 'next/navigation'
+import { Abi } from "viem"
 
+// Define types for Commit and CommitmentDetails
 interface Commit {
-  id: string;
-  oneLiner: string;
-  participants: string[];
-  stakeAmount: string;
-  deadline: string;
+  id: string
+  description: string
+  stakeAmount: string
+  CommitProtocol_id: number
 }
 
-const graphqlClient = new GraphQLClient("https://api.studio.thegraph.com/query/93948/commit/version/latest");
+interface CommitmentDetails {
+  participantCount: bigint
+  timeRemaining: bigint
+}
 
+// GraphQL Client setup
+const graphqlClient = new GraphQLClient("https://api.studio.thegraph.com/query/93948/commit/version/latest")
+
+// Define GraphQL query
 const GET_ACTIVE_COMMITS = gql`
-  query GetActiveCommits {
-  commitmentCreateds(first: 10) {
-    id
-    CommitProtocol_id
-    creator
-    client
-    tokenAddress
-    stakeAmount
-    joinFee
-    creatorShare
-    blockNumber
-    blockTimestamp
-    transactionHash
+  query Subgraphs {
+    commitmentCreateds(first: 10) {
+      CommitProtocol_id
+      description
+      stakeAmount
+    }
   }
-  }
-`;
+`
+
+// Contract address and ABI for interacting with smart contract
+const contractAddress: `0x${string}` = "0x15ef602D45B42c63402af795bD2A96742ee936a7"
+const contractABI: Abi = [
+  {
+    name: "getCommitmentDetails",
+    type: "function",
+    inputs: [{ type: "uint256", name: "commitId" }],
+    outputs: [
+      { type: "uint256", name: "participantCount" },
+      { type: "uint256", name: "timeRemaining" },
+    ],
+    stateMutability: "view",
+  },
+] as const
 
 export default function CommitPage() {
-  const { isConnected } = useAccount();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const { isConnected } = useAccount()
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const router = useRouter()
 
-  // Fetch active commits using TanStack React Query, with type annotation
-  const { data, isLoading, error } = useQuery<{ commitmentCreateds: Commit[] }>({
-    queryKey: ["activeCommits"],
+  // Fetch active commits using GraphQL
+  const { data: graphqlData, isLoading: graphqlLoading, error: graphqlError } = useQuery<{ commitmentCreateds: Commit[] }>({
+    queryKey: ["data"],
     queryFn: async () => {
-      const response = await graphqlClient.request<{ commitmentCreateds: Commit[] }>(GET_ACTIVE_COMMITS);
-      return response;
+      return await graphqlClient.request(GET_ACTIVE_COMMITS)
     },
-  });
+  })
+
+  // Use wagmi to read contract data for each commit
+  const contractReadConfigs =
+    graphqlData?.commitmentCreateds.map((commit) => ({
+      address: contractAddress,
+      abi: contractABI,
+      functionName: "getCommitmentDetails",
+      args: [BigInt(commit.CommitProtocol_id)],
+    })) || []
+
+  const { data: contractDataResults, isLoading: contractsLoading, error: contractsError } = useReadContracts({
+    contracts: contractReadConfigs,
+  })
+
+  // Combine GraphQL data with contract results
+  const combinedCommitments =
+    graphqlData?.commitmentCreateds.map((commit, index) => {
+      const contractResult = contractDataResults?.[index]
+
+      if (contractResult && 'result' in contractResult && Array.isArray(contractResult.result)) {
+        const [participantCount, timeRemaining] = contractResult.result as [bigint, bigint]
+        return {
+          ...commit,
+          participants: participantCount.toString(),
+          timeRemaining: `${timeRemaining / BigInt(60)} minutes`,
+        }
+      } else {
+        return {
+          ...commit,
+          participants: "0",
+          timeRemaining: "N/A",
+        }
+      }
+    }) ?? []
 
   const handleProfile = () => {
-    setDropdownOpen(false);
-    window.location.href = "/profile";
-  };
+    setDropdownOpen(false)
+    window.location.href = "/profile"
+  }
 
-  if (isLoading) return <p>Loading...</p>;
-  if (error) return <p>Error loading commits</p>;
+  // Return loading and error UI
+  if (graphqlLoading || contractsLoading) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    )
+  }
+  if (graphqlError || contractsError) return <p>Error loading data. Please try again later.</p>
 
   return (
     <div className="flex flex-col space-y-8 p-6">
@@ -71,7 +129,7 @@ export default function CommitPage() {
                   >
                     Connect Wallet
                   </button>
-                );
+                )
               }
               return (
                 <div>
@@ -91,8 +149,8 @@ export default function CommitPage() {
                       </button>
                       <button
                         onClick={() => {
-                          setDropdownOpen(false);
-                          openAccountModal();
+                          setDropdownOpen(false)
+                          openAccountModal()
                         }}
                         className="block w-full text-left px-4 py-2 hover:text-green-500"
                       >
@@ -101,24 +159,29 @@ export default function CommitPage() {
                     </div>
                   )}
                 </div>
-              );
+              )
             }}
           </ConnectButton.Custom>
         </div>
       </div>
 
       <div className="space-y-4">
-        {data?.commitmentCreateds.map((commit) => (
-          <CommitCard
-            key={commit.id}
-            oneLiner={commit.oneLiner}
-            participants={10}
-            stakeAmount={commit.stakeAmount}
-            deadline={commit.deadline}
-            id={parseInt(commit.id, 10)}
-          />
+        {combinedCommitments.map((commit) => (
+          <div
+            key={commit.CommitProtocol_id}
+            onClick={() => router.push(`/commit/${commit.CommitProtocol_id}`)}
+            className="cursor-pointer"
+          >
+            <CommitCard
+              oneLiner={commit.description}
+              participants={commit.participants}
+              stakeAmount={(BigInt(commit.stakeAmount) / BigInt(10**18)).toString()}
+              deadline={commit.timeRemaining}
+              id={commit.CommitProtocol_id}
+            />
+          </div>
         ))}
       </div>
     </div>
-  );
+  )
 }
