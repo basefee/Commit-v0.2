@@ -8,7 +8,8 @@ import { ConnectButton } from "@rainbow-me/rainbowkit"
 import { GraphQLClient, gql } from "graphql-request"
 import { Loader2 } from "lucide-react"
 import { useRouter } from 'next/navigation'
-import { Abi } from "viem"
+import abi from "../../contract/abi.json";
+import { Abi } from "viem";
 
 // Define types for Commit and CommitmentDetails
 interface Commit {
@@ -38,19 +39,8 @@ const GET_ACTIVE_COMMITS = gql`
 `
 
 // Contract address and ABI for interacting with smart contract
-const contractAddress: `0x${string}` = "0x15ef602D45B42c63402af795bD2A96742ee936a7"
-const contractABI: Abi = [
-  {
-    name: "getCommitmentDetails",
-    type: "function",
-    inputs: [{ type: "uint256", name: "commitId" }],
-    outputs: [
-      { type: "uint256", name: "participantCount" },
-      { type: "uint256", name: "timeRemaining" },
-    ],
-    stateMutability: "view",
-  },
-] as const
+const contractAddress: `0x${string}` = "0x15ef602D45B42c63402af795bD2A96742ee936a7";
+const contractABI: Abi = abi as Abi;
 
 export default function CommitPage() {
   const { isConnected } = useAccount()
@@ -88,13 +78,13 @@ export default function CommitPage() {
         return {
           ...commit,
           participants: participantCount.toString(),
-          timeRemaining: `${timeRemaining / BigInt(60)} minutes`,
+          timeRemaining: `${BigInt(timeRemaining) / BigInt(60)} minutes`,
         }
       } else {
         return {
           ...commit,
           participants: "0",
-          timeRemaining: "N/A",
+          timeRemaining: "N/A", // Fallback for missing data
         }
       }
     }) ?? []

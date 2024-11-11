@@ -1,151 +1,177 @@
 "use client";
 
-import { useState, ChangeEvent, FormEvent } from "react";
+import { useState } from "react";
+import { Formik, Field, Form, ErrorMessage } from "formik";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import axios from "axios";
+import * as Yup from "yup";
+import abi from "../../contract/abi.json"
+
+const CommitSchema = Yup.object().shape({
+  oneLiner: Yup.string().required("Required"),
+  description: Yup.string().required("Required"),
+  resolutionRules: Yup.string().required("Required"),
+  joiningDeadline: Yup.date().required("Required"),
+  fulfillmentDeadline: Yup.date().required("Required"),
+  creatorFee: Yup.number().required("Required"),
+  commitStake: Yup.number().required("Required"),
+  token: Yup.string().required("Required"),
+});
+
+const contractABI = abi;
+const contractAddress = "0x15ef602D45B42c63402af795bD2A96742ee936a7";
 
 export default function CreateCommitPage() {
-  const [oneLiner, setOneLiner] = useState<string>("");
-  const [description, setDescription] = useState<string>("");
-  const [resolutionRules, setResolutionRules] = useState<string>("");
-  const [deadline, setDeadline] = useState<string>("");
-  const [creatorFee, setCreatorFee] = useState<number>(1);
-  const [commitStake, setCommitStake] = useState<number>(10);
+  const { isConnected } = useAccount();
+  const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
 
-  const handleInputChange = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = event.target;
-    switch (name) {
-      case "oneLiner":
-        setOneLiner(value);
-        break;
-      case "description":
-        setDescription(value);
-        break;
-      case "resolutionRules":
-        setResolutionRules(value);
-        break;
-      case "deadline":
-        setDeadline(value);
-        break;
-      case "creatorFee":
-        setCreatorFee(Number(value));
-        break;
-      case "commitStake":
-        setCommitStake(Number(value));
-        break;
-      default:
-        break;
+  const { writeContract, data: writeData, error: writeError, isPending: isWritePending } = useWriteContract()
+
+  const { isLoading: txLoading, isSuccess: txSuccess } = useWaitForTransactionReceipt({
+    hash: txHash,
+  })
+
+  const saveCommitToPrisma = async (commitId: number, values: any) => {
+    const { oneLiner, description, resolutionRules, creatorFee, commitStake, joiningDeadline, fulfillmentDeadline } = values
+    try {
+      await axios.post("/api/createCommit", { 
+        commitId, 
+        oneLiner, 
+        description, 
+        resolutionRules, 
+        creatorFee, 
+        commitStake, 
+        joiningDeadline, 
+        fulfillmentDeadline 
+      })
+    } catch (error) {
+      console.error("Failed to save commit to database:", error)
     }
-  };
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    // Handle the form submission
-    console.log({
-      oneLiner,
-      description,
-      resolutionRules,
-      deadline,
-      creatorFee,
-      commitStake,
-    });
-  };
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-zinc-950 text-white">
       <h1 className="text-4xl font-semibold mb-8">Commit to Something</h1>
       
-      <form onSubmit={handleSubmit} className="w-full max-w-md space-y-6">
-        <div>
-          <label className="block text-lg mb-2">I'm committing to ...</label>
-          <input
-            type="text"
-            name="oneLiner"
-            value={oneLiner}
-            onChange={handleInputChange}
-            placeholder="one-liner description"
-            className="w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500"
-            required
-          />
-        </div>
+      <Formik
+        initialValues={{
+          oneLiner: "",
+          description: "",
+          resolutionRules: "",
+          joiningDeadline: "",
+          fulfillmentDeadline: "",
+          creatorFee: 1,
+          commitStake: 10,
+          token: "USDC",
+        }}
+        validationSchema={CommitSchema}
+        onSubmit={async (values, { setSubmitting }) => {
+          if (!isConnected) {
+            alert("Please connect your wallet first")
+            setSubmitting(false)
+            return
+          }
 
-        <div>
-          <label className="block text-lg mb-2">Description</label>
-          <textarea
-            name="description"
-            value={description}
-            onChange={handleInputChange}
-            placeholder="Detailed overview"
-            className="w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500"
-            rows={4}
-            required
-          />
-        </div>
+          try { // Modify this later
+            const result = await writeContract({
+              address: contractAddress,
+              abi: contractABI,
+              functionName: 'createCommitment',
+              args: [
+                values.oneLiner,
+                values.description,
+                values.resolutionRules,
+                BigInt(Math.floor(new Date(values.joiningDeadline).getTime() / 1000)),
+                BigInt(Math.floor(new Date(values.fulfillmentDeadline).getTime() / 1000)),
+                BigInt(Math.floor(values.creatorFee * 100)),
+                BigInt(Math.floor(values.commitStake * 1e18)),
+                values.token
+              ],
+            })
 
-        <div>
-          <label className="block text-lg mb-2">Resolution Rules</label>
-          <textarea
-            name="resolutionRules"
-            value={resolutionRules}
-            onChange={handleInputChange}
-            placeholder="What would count as success?"
-            className="w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500"
-            rows={4}
-            required
-          />
-        </div>
+            if (result) {
+              setTxHash(result)
+            }
+          } catch (error) {
+            console.error("Failed to send transaction", error)
+            alert("Failed to send transaction. Please try again.")
+          }
+          
+          setSubmitting(false)
+        }}
+      >
+        {({ isSubmitting }) => (
+          <Form className="w-full max-w-md space-y-6">
+            <div>
+              <label className="block text-lg mb-2">One-Liner</label>
+              <Field name="oneLiner" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" placeholder="Short description" />
+              <ErrorMessage name="oneLiner" component="div" className="error" />
+            </div>
 
-        <div>
-          <label className="block text-lg mb-2">Deadline</label>
-          <input
-            type="datetime-local"
-            name="deadline"
-            value={deadline}
-            onChange={handleInputChange}
-            className="w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500"
-            required
-          />
-        </div>
+            <div>
+              <label>Description</label>
+              <Field name="description" component="textarea" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" placeholder="Detailed description" />
+              <ErrorMessage name="description" component="div" className="error" />
+            </div>
 
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="block text-lg mb-2">Creator Fee</label>
-            <input
-              type="number"
-              name="creatorFee"
-              value={creatorFee}
-              onChange={handleInputChange}
-              className="w-20 p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500"
-              required
-            />
-          </div>
+            <div>
+              <label>Resolution Rules</label>
+              <Field name="resolutionRules" component="textarea" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" placeholder="Rules for resolution" />
+              <ErrorMessage name="resolutionRules" component="div" className="error" />
+            </div>
 
-          <span className="text-lg text-green-500">$HIGHER</span>
+            <div>
+              <label>Joining Deadline</label>
+              <Field name="joiningDeadline" type="datetime-local" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" />
+              <ErrorMessage name="joiningDeadline" component="div" className="error" />
+            </div>
 
-          <div>
-            <label className="block text-lg mb-2">Commit Stake</label>
-            <input
-              type="number"
-              name="commitStake"
-              value={commitStake}
-              onChange={handleInputChange}
-              className="w-20 p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500"
-              required
-            />
-          </div>
+            <div>
+              <label>Fulfillment Deadline</label>
+              <Field name="fulfillmentDeadline" type="datetime-local" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" />
+              <ErrorMessage name="fulfillmentDeadline" component="div" className="error" />
+            </div>
 
-          <span className="text-lg text-green-500">$HIGHER</span>
-        </div>
+            <div>
+              <label>Creator Fee</label>
+              <Field name="creatorFee" type="number" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" />
+              <ErrorMessage name="creatorFee" component="div" className="error" />
+            </div>
 
-        <p className="text-gray-500 text-sm mt-4">
-          Note: to prevent spam, creating a commit costs 0.001 ETH. Thank you for your support. Let’s commit!
-        </p>
+            <div>
+              <label>Commit Stake</label>
+              <Field name="commitStake" type="number" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500" />
+              <ErrorMessage name="commitStake" component="div" className="error" />
+            </div>
 
-        <button
-          type="submit"
-          className="w-full p-3 mt-4 bg-green-500 text-white font-semibold rounded hover:bg-green-600 focus:outline-none"
-        >
-          Commit
-        </button>
-      </form>
+            <div>
+              <label>Token</label>
+              <Field as="select" name="token" className="input w-full p-3 rounded bg-zinc-800 text-white placeholder-gray-500 border border-zinc-800 focus:outline-none focus:border-green-500">
+                <option value="USDC">USDC</option>
+                <option value="DAI">DAI</option>
+                <option value="ETH">ETH</option>
+              </Field>
+              <ErrorMessage name="token" component="div" className="error" />
+            </div>
+
+            <button type="submit" className="button w-full p-3 mt-4 bg-green-500 text-white font-semibold rounded hover:bg-green-600 focus:outline-none" disabled={isSubmitting || isWritePending || txLoading}>
+              {isSubmitting || isWritePending || txLoading ? "Processing..." : "Commit"}
+            </button>
+
+            {writeError && (
+              <div className="error-message">
+                Error: {writeError.message || "Failed to create commit. Please try again."}
+              </div>
+            )}
+
+            {txSuccess && (
+              <div className="success-message">
+                Commit created successfully! Transaction hash: {txHash}
+              </div>
+            )}
+          </Form>
+        )}
+      </Formik>
     </div>
-  );
+  )
 }

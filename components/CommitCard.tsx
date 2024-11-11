@@ -3,7 +3,7 @@ import Link from 'next/link';
 
 interface CommitCardProps {
   oneLiner: string;
-  participants: number;
+  participants: string;
   stakeAmount?: string; // Optional
   deadline?: string;    // Optional
   id: number;           // Add an ID to know which page to redirect to
