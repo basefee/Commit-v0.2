@@ -8,8 +8,8 @@ import { ConnectButton } from "@rainbow-me/rainbowkit"
 import { GraphQLClient, gql } from "graphql-request"
 import { Loader2 } from "lucide-react"
 import { useRouter } from 'next/navigation'
-import abi from "../../contract/abi.json";
-import { Abi } from "viem";
+import abi from "../../contract/abi.json"
+import { Abi } from "viem"
 
 // Define types for Commit and CommitmentDetails
 interface Commit {
@@ -20,7 +20,13 @@ interface Commit {
 }
 
 interface CommitmentDetails {
+  creator: string
+  client: string
+  stakeAmount: bigint
+  joinFee: bigint
   participantCount: bigint
+  description: string
+  status: number
   timeRemaining: bigint
 }
 
@@ -39,8 +45,8 @@ const GET_ACTIVE_COMMITS = gql`
 `
 
 // Contract address and ABI for interacting with smart contract
-const contractAddress: `0x${string}` = "0x15ef602D45B42c63402af795bD2A96742ee936a7";
-const contractABI: Abi = abi as Abi;
+const contractAddress: `0x${string}` = "0x15ef602D45B42c63402af795bD2A96742ee936a7"
+const contractABI: Abi = abi as Abi
 
 export default function CommitPage() {
   const { isConnected } = useAccount()
@@ -74,17 +80,25 @@ export default function CommitPage() {
       const contractResult = contractDataResults?.[index]
 
       if (contractResult && 'result' in contractResult && Array.isArray(contractResult.result)) {
-        const [participantCount, timeRemaining] = contractResult.result as [bigint, bigint]
+        const [creator, client, stakeAmount, joinFee, participantCount, description, status, timeRemaining] = contractResult.result as [string, string, bigint, bigint, bigint, string, number, bigint]
         return {
           ...commit,
+          creator,
+          client,
+          joinFee: joinFee.toString(),
           participants: participantCount.toString(),
-          timeRemaining: `${BigInt(timeRemaining) / BigInt(60)} minutes`,
+          status,
+          timeRemaining: timeRemaining.toString(),
         }
       } else {
         return {
           ...commit,
+          creator: "Unknown",
+          client: "Unknown",
+          joinFee: "0",
           participants: "0",
-          timeRemaining: "N/A", // Fallback for missing data
+          status: 0,
+          timeRemaining: "0",
         }
       }
     }) ?? []
@@ -166,7 +180,7 @@ export default function CommitPage() {
               oneLiner={commit.description}
               participants={commit.participants}
               stakeAmount={(BigInt(commit.stakeAmount) / BigInt(10**18)).toString()}
-              deadline={commit.timeRemaining}
+              deadline={commit.timeRemaining === "0" ? "Expired" : `${BigInt(commit.timeRemaining) / BigInt(60)} minutes`}
               id={commit.CommitProtocol_id}
             />
           </div>
