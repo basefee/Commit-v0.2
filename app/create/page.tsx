@@ -5,6 +5,7 @@ import { Formik, Field, Form, ErrorMessage } from "formik"
 import { useAccount, useWriteContract, useReadContract } from "wagmi"
 import { waitForTransactionReceipt } from "@wagmi/core"
 import * as Yup from "yup"
+import axios from "axios"
 import { parseUnits } from "viem"
 import { config } from "../../wagmi"
 import abi from "../../contract/abi.json"
@@ -89,8 +90,8 @@ export default function CreateCommitPage() {
         }
       } as any);
 
-      await waitForTransactionReceipt(config, { hash: createTx })
-      setMessage("Successfully created the commitment!")
+      const receipt = await waitForTransactionReceipt(config, { hash: createTx })
+
     } catch (error) {
       console.error("Error during commitment creation:", error)
       setMessage("An error occurred during the commitment creation process.")

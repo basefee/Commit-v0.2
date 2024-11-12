@@ -1,8 +1,0 @@
-{
-  "sepolia": {
-    "CommitProtocol": {
-      "address": "0x2A1b5ef25Ca529D325ABF46D127cD0FC23a64E42",
-      "startBlock": 7037979
-    }
-  }
-}
