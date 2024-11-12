@@ -91,7 +91,7 @@ export default function CreateCommitPage() {
       } as any);
 
       const receipt = await waitForTransactionReceipt(config, { hash: createTx })
-
+ 
     } catch (error) {
       console.error("Error during commitment creation:", error)
       setMessage("An error occurred during the commitment creation process.")

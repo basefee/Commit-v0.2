@@ -10,6 +10,12 @@ datasource db {
 model Commit {
   id                   String   @id @default(auto()) @map("_id") @db.ObjectId
   commitId             Int      @unique
+  oneLiner             String
   description          String
   resolutionRules      String
+  creatorFee           Float
+  commitStake          Float
+  joiningDeadline      DateTime
+  fulfillmentDeadline  DateTime
+  createdAt            DateTime @default(now())
 }
